@@ -1,0 +1,96 @@
+# ════════════════════════════════════════════════════════════════════
+# .gitignore — rues-linker
+# Generado automáticamente por el notebook de publicación.
+# PRINCIPIO: solo va a git el CÓDIGO.
+# ════════════════════════════════════════════════════════════════════
+
+
+# ── Python ────────────────────────────────────────────────────────────
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+
+
+# ── Datos y archivos binarios ─────────────────────────────────────────
+*.coverage
+*.csv
+*.gif
+*.ipynb
+*.jpeg
+*.jpg
+*.parquet
+*.pdf
+*.pkl
+*.png
+*.xls
+*.xlsx
+*.zip
+
+
+# ── Carpetas excluidas ────────────────────────────────────────────────
+.eggs/
+.git/
+.ipynb_checkpoints/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+build/
+data/
+dist/
+env/
+mnt/
+record_linkage.egg-info/
+rues_linker.egg-info/
+venv/
+
+
+# ── Archivos específicos excluidos ────────────────────────────────────
+benchmark_e2e_report.json
+coverage.xml
+setup.cfg
+setup.py
+
+
+# ── Carpetas de trabajo personal ──────────────────────────────────────
+z. */
+z.*/
+
+
+# ── IDE ───────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+
+# ── Credenciales ──────────────────────────────────────────────────────
+.env
+.env.local
+secrets.json
+*_token.txt
+*.pem
+*.key
+
+
+# ── Excepciones (siempre incluir) ────────────────────────────────
+# Estas reglas DEBEN ser las últimas del archivo.
+# En .gitignore la última coincidencia gana; si una regla
+# de exclusión aparece después de una excepción, la anula.
+!notebooks/calibracion_produccion.ipynb
+!notebooks/ejecutar.ipynb
+!notebooks/produccion_4fuentes.ipynb
+!tests/data/golden_truth.csv
+!tests/data/golden_truth_exhaustivo.csv
+!tests/data/golden_truth_exhaustivo_ciudad.csv
+!tests/data/golden_truth_sintetico_robusto.csv
+!tests/data/oraculo_scorer_p1_1.pkl
+!tests/data/plantilla_etiquetado.csv
+!tests/data_sintetica/dataset_p0_1_nit_identico.csv
+!tests/data_sintetica/dataset_sintetico_p0_1.csv
+!tests/data_sintetica/dataset_sintetico_p2_extra_features.csv

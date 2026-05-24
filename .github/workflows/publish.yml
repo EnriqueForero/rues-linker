@@ -1,0 +1,53 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Publication target"
+        type: choice
+        required: true
+        default: testpypi
+        options:
+          - testpypi
+          - pypi
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.target == 'pypi' && 'pypi' || 'testpypi' }}
+      url: ${{ github.event.inputs.target == 'pypi' && 'https://pypi.org/p/rues-linker' || 'https://test.pypi.org/p/rues-linker' }}
+    permissions:
+      id-token: write  # Necesario para trusted publishing OIDC
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Verify distributions
+        run: twine check dist/*
+
+      - name: Publish to TestPyPI
+        if: github.event.inputs.target == 'testpypi' || github.event_name == 'workflow_dispatch'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+      - name: Publish to PyPI
+        if: github.event.inputs.target == 'pypi' || github.event_name == 'release'
+        uses: pypa/gh-action-pypi-publish@release/v1
