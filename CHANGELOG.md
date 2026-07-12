@@ -1,5 +1,770 @@
 # Changelog
 
+Todas las versiones notables de `rues-linker` se documentan aquí.
+Formato basado en [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+y [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+
+> ## 📍 Estado actual: 0.x — pre-1.0
+>
+> El paquete está en **desarrollo activo** y la API puede cambiar entre
+> minor releases. **Aún NO está publicado en PyPI**. Antes de llegar a
+> 1.0 se debe: validar contra producción real (1.97M registros), subir
+> cobertura a 80%, y completar refactor de módulos heredados para mypy
+> strict. Ver `docs/VERSIONING.md`.
+
+---
+
+## [0.7.6] — 2026-07-11 — Pin de compatibilidad: datasketch < 2.0
+
+### Resumen
+
+Regresión E2E causada por una dependencia externa, no por código del repo.
+`datasketch 2.0.0` (publicado entre la captura del baseline v0.9.0 y hoy)
+cambia el esquema de generación de firmas MinHash: el mismo input con el
+mismo `seed` produce `hashvalues` distintas a las de 1.x. Eso altera el
+banding LSH y el grafo de candidatos; el régimen SIN_NIT (sin ancla de NIT,
+operando en el filo de percolación) se sobre-fusiona en clústeres gigantes.
+El gate de publicación funcionó exactamente como se diseñó: bloqueó la
+regresión antes de llegar a GitHub/PyPI.
+
+### Fixed
+- `pyproject.toml`: `datasketch>=1.6` → **`datasketch>=1.6,<2.0`**. Evidencia
+  medida sobre `ground_truth_grande.csv` (12.427 registros mixtos), mismo
+  código y mismos datos, cambiando SOLO la versión de datasketch:
+  - Con 1.10.0: global F1=0.563 / P=0.401 / R=0.944 (tp=20839, fp=31133,
+    fn=1234) — reproduce el baseline v0.9.0 al tercer decimal.
+  - Con 2.0.0: global F1=0.250 / P=0.144 / R=0.945 (tp=20852, fp=124054,
+    fn=1221) — reproduce entero a entero el fallo observado en Colab.
+  - CON_NIT es estable en ambas versiones (F1≈0.96): el NIT ancla la
+    identidad. El colapso es exclusivo de SIN_NIT (P 0.123 → 0.034).
+  - Verificación a nivel de firma: `MinHash(num_perm=16, seed=1)` sobre el
+    mismo shingle-set produce `hashvalues` distintas entre 1.10.0 y 2.0.0.
+
+### Changed
+- Versión 0.7.5 → 0.7.6 (`pyproject.toml` y assert de
+  `tests/test_matching_integration.py`).
+
+### Notes
+- `tests/data/baseline_v0_9_0.json` NO se regenera: con el pin, el pipeline
+  vuelve a producir exactamente las métricas congeladas.
+- Migrar a datasketch 2.x queda como tarea futura explícita: exigirá
+  regenerar el baseline y re-validar la percolación del régimen SIN_NIT.
+
+### Fixed (gate de tests — segundo bloqueo, mismo release)
+- `tests/test_fase4_consolidacion.py`: la clase `TestOptunaIntegrationRemoved`
+  afirmaba que los módulos heredados `optimization/optuna_integration.py` y
+  `optimization/visualizer.py` fueron ELIMINADOS, pero siguen presentes como
+  shims deprecados (emiten DeprecationWarning e importan optuna/plotly a nivel
+  módulo). La clase estaba rota en AMBOS entornos, con tests distintos fallando
+  en cada uno:
+  - Sin optuna (gate local, `pip install -e .`): `OrchestratorOptimizer` es un
+    símbolo opt-in que `evaluation/__init__.py` solo exporta si
+    `OPTUNA_AVAILABLE`; el test lo importaba incondicionalmente → ImportError.
+  - Con optuna (CI de GitHub, `pip install -e ".[dev]"`, que incluye optuna y
+    plotly): los shims SÍ importan → los tests que exigían ModuleNotFoundError
+    fallaban con "DID NOT RAISE".
+- Corrección: clase renombrada a `TestOptunaIntegrationDeprecated` y alineada a
+  la realidad y a la propia intención del docstring del módulo (punto 5:
+  "OptunaIntegration emite DeprecationWarning al importar"). Los tres tests se
+  protegen con `pytest.importorskip("optuna")` (y `("plotly")`), el mismo patrón
+  que `test_fase3_optuna.py`. Resultado medido: sin optuna → 3 skip (gate local
+  verde); con optuna → 3 pasan (CI verde). Archivo `fase4` completo: 20 passed +
+  3 skipped sin optuna; 23 passed con optuna. ruff 4/4 limpio.
+- Es un bug del test, no de la librería: el diseño opt-in de
+  `OrchestratorOptimizer` es correcto (importarlo sin optuna fallaría). No se
+  cambió código de la librería ni se regeneró ningún baseline.
+- Deuda futura (no bloqueante): los shims `optuna_integration.py` y
+  `visualizer.py` de `optimization/` son código muerto (ningún módulo vivo los
+  importa) y el roadmap ya prevé su eliminación. Borrarlos y volver los tests a
+  exigir ModuleNotFoundError es tarea de higiene para la Fase 0 del playbook.
+
+---
+
+## [0.7.5] — 2026-05-28 — SIN_NIT recalibrado + enrutamiento automático (production-ready)
+
+### Resumen
+
+Ataca la deuda #1 (SIN_NIT) de forma real, medida contra ground truth. El F1
+global del régimen mixto pasa de **0.563 → 0.907** vía enrutamiento automático
+por régimen. SIN_NIT individual sube de **0.217 → 0.645** (P=0.91).
+
+### Added
+- **`deduplicate_auto`** (`deduplication/auto.py`) — entrada recomendada para
+  producción. Separa el dataset por régimen (CON_NIT / SIN_NIT), aplica el
+  perfil ÓPTIMO a cada uno y recombina con IDs de grupo globalmente únicos.
+  Expuesto en `record_linkage.deduplicate_auto`. El usuario ya no tiene que
+  elegir perfil manualmente.
+
+  Medido sobre `ground_truth_grande.csv` (12.427 registros mixtos):
+
+  | Método | Global F1 | Global P | CON_NIT | SIN_NIT |
+  |---|---|---|---|---|
+  | deduplicate_unified (anterior) | 0.563 | 0.401 | 0.961 | 0.217 |
+  | **deduplicate_auto (nuevo)** | **0.907** | **0.966** | 0.962 | 0.645 |
+
+- Tests: `tests/test_deduplicate_auto.py` (8), `tests/test_sin_nit_recalibrado.py` (3).
+
+### Changed
+- **Perfil `deduplication_sin_nit_conservador` recalibrado contra ground truth.**
+  `min_name_similarity` y `score_threshold`: 0.75/0.80 → **0.78/0.78** (óptimo
+  F1 hallado por barrido). Resultado sobre 2342 registros SIN_NIT:
+  **P=0.907, R=0.501, F1=0.645** (antes F1=0.470 con el umbral previo, F1=0.217
+  con el perfil estándar). El comentario del perfil ahora cita cifras MEDIDAS,
+  no de composición (antes decía "sin ground truth no se puede afirmar un F1").
+
+### Findings (medición exhaustiva)
+- **SIN_NIT tiene un techo de datos en F1≈0.65**, no de calibración. Barrido
+  completo de umbrales: ninguno supera 0.65 sin colapsar precision. Causas:
+  typos OCR (`NENOVA`/`NNEOVA`, `GARDENING`/`GARDSNING`) y romanización coreana
+  inconsistente (PUSAN=BUSAN, TAEGU=DAEGU, SEÚL=SEUL=SEOUL).
+- **La ciudad NO discrimina**: solo ~7 ciudades reales, cada una con 80-105
+  grupos distintos. Usarla como feature de matching empeora (F1 0.549→0.189).
+  Confirmado cuantitativamente; documentado en `docs/DEUDA_SIN_NIT.md`.
+
+### Production-ready
+- `deduplicate_auto` enruta automáticamente — el camino correcto sin que el
+  usuario recuerde perfiles.
+- `deduplicate_unified` advierte (UserWarning) si se usa en datos mixtos.
+- Tests de no-regresión congelan F1 SIN_NIT (≥0.61) y global auto (≥0.85).
+
+### Test results
+- Regresión completa verde (434 + 62 sin-slow + 44 nuevos/sprint), 0 glyph warnings.
+
+---
+
+
+
+Sprint de pago de deuda detectada en los Sprints 0.8.x–0.9.0. Cinco frentes,
+todos verificados empíricamente antes de tocar código.
+
+### Fixed
+- **Warnings de glyph en matplotlib — CAUSA RAÍZ** (deuda desde Sprint 0.8.1).
+  El regex `_strip_emojis` en `reporting/_text_utils.py` era INCOMPLETO: no
+  cubría Misc Technical (⏱ U+23F1), Misc Symbols & Arrows (⭐ U+2B50) ni el
+  selector de variación (U+FE0F). Por eso quedaban `UserWarning: Glyph N
+  missing from font` vivos por tres sprints pese a los "fixes" anteriores.
+  Reescrito con cobertura exhaustiva de bloques Unicode de símbolos/emojis.
+  Verificado: acentos y ñ españoles intactos; **0 glyph warnings** en
+  `test_fase1_calibracion` (antes: 63). Faltaba sanitizar `quality_text` en
+  `visualizer.py` — corregido.
+- **Checkpoints stale de firmas MinHash — CAUSA RAÍZ** (bug visto 2 veces:
+  Sprints 0.8.1 y 0.9.0). `_validate_signatures_file` validaba solo por
+  `(n_records, num_perm, ngram)`; dos corpus DISTINTOS con el mismo número de
+  filas reusaban firmas incorrectas (síntoma: baseline 0.9.0 truncado a
+  1131/12427). Nuevo `_content_fingerprint()` (hash SHA256 de muestra del
+  contenido + parámetros) se guarda en `hf.attrs["content_fp"]` y se valida
+  en cada reuso. Checkpoints viejos sin huella se regeneran una vez (seguro).
+
+### Changed
+- **Docstring de `deduplicate_unified` corregido**. La cifra "Orchestrator con
+  trusted sources: F1 = 0.875" NO era reproducible (deuda de documentación:
+  afirmación sin test). Reemplazada por las cifras realmente medidas en v0.7.4:
+  `deduplicate_unified` F1 global 0.563; `Orchestrator + produccion_calibrada`
+  F1 global 0.842. Ambos CON_NIT≈0.96; ambos fallan SIN_NIT (sobre-fusión vs
+  no-fusión). Ver `docs/DEUDA_SIN_NIT.md`.
+
+### Added
+- **Guardián de mezcla de regímenes**: `deduplicate_unified` ahora emite
+  `UserWarning` cuando detecta mezcla CON_NIT/SIN_NIT (5%–95% de NIT vacío).
+  El docstring ya lo advertía, pero una advertencia en runtime es más difícil
+  de ignorar. 4 tests.
+- **`docs/DEUDA_SIN_NIT.md`** — análisis empírico completo del régimen SIN_NIT:
+  por qué sobre-fusiona, por qué CIUDAD como discriminante lo empeora
+  (F1 0.549→0.189 por ciudades inconsistentes de importadores), y los 4
+  caminos reales de solución (todos requieren trabajo, ninguno es un flag).
+- **Tests nuevos** (32):
+    - `tests/test_strip_emojis.py` (17): cobertura del helper por cada rango
+      Unicode antes roto + preservación de acentos.
+    - `tests/test_checkpoint_fingerprint.py` (11): huella distingue corpus,
+      no reusa corpus distinto del mismo tamaño, checkpoint viejo sin huella
+      se regenera, retrocompat sin huella.
+    - `tests/test_regimen_warning.py` (4): advertencia en mezcla, silencio en
+      datasets homogéneos y en ruido <5%.
+
+### Hallazgo honesto (corrección de sprints previos)
+- El baseline del Sprint 0.9.0 (`baseline_v0_9_0.json`) se midió con
+  `deduplicate_unified`, el método que el propio código advierte que sobre-
+  fusiona en datos mixtos. Sus cifras de SIN_NIT (F1 0.217) reflejan ese
+  método, no el límite del sistema. Sigue siendo válido como detector de
+  REGRESIÓN, pero NO como "calidad del sistema en SIN_NIT". Documentado.
+- **SIN_NIT no tiene fix por parámetros.** Es un problema de datos
+  (importadores sin identificador estable, ciudades inconsistentes). Tunear
+  ciegamente lo empeora. La acción responsable fue documentarlo con precisión.
+
+### Test results
+- Baseline previo (v0.7.3): 545/545 verde.
+- Post-deuda (v0.7.4): regresión completa verde (434 + 62 sin-slow + 32 nuevos),
+  **0 glyph warnings** (antes 63), bug de checkpoints cerrado con test E2E.
+
+---
+
+
+
+### Contexto
+
+El plan describía el Sprint 0.9.0 como "construcción de ground truth estratificado
+desde cero" (5-7 días). La auditoría del repo reveló que **el protocolo, el muestreo,
+el evaluador y un GT sintético robusto YA EXISTÍAN**:
+  - `docs/PROTOCOLO_GROUND_TRUTH.md` (173 líneas)
+  - `scripts/generar_pares_para_etiquetar.py`, `muestrear_rues_para_gt.py`,
+    `active_labeling.py` (muestreo + selección por incertidumbre)
+  - `evaluation/ground_truth.py::GroundTruthEvaluator` (P/R/F1 pairwise + clustering)
+  - `data/ground_truth/ground_truth_grande.csv` (12,427 filas, 3,486 grupos, 5 fuentes)
+
+Lo que faltaba no era construir nada, sino **medir el pipeline contra ese GT** y
+**cubrir con tests el evaluador**. El sprint se reorientó a eso (decisión consensuada).
+
+### Added
+- **`scripts/medir_baseline_v0_9_0.py`** — harness de baseline. Corre el pipeline
+  (`deduplicate_unified`) contra el GT grande y mide P/R/F1 desglosado por:
+    - régimen (CON_NIT / SIN_NIT)
+    - caso (positivo_con_nit / positivo_sin_nit / negativo_intermediario / negativo_generico)
+    - fuente (CRM / DIAN / IMPORTACIONES / RUES / SUPERSOCIEDADES)
+
+  Output: JSON con umbrales (medido − tolerancia) listo para consumir desde tests.
+  **Fix incluido**: limpia el `output_dir` antes de correr — `deduplicate_unified`
+  reusa checkpoints stale (`lsh_candidates.db`, `intermediate_checkpoints/`) y sin
+  limpiar contaminaba la medición (síntoma: output truncado a 1131/12427 filas).
+- **`tests/data/baseline_v0_9_0.json`** — baseline congelado (v0.7.3,
+  profile `deduplication_standard`, mode `BALANCEADO`). Cifras medidas:
+    - **CON_NIT: F1=0.961** (P=0.972, R=0.950) — régimen confiable.
+    - **SIN_NIT: F1=0.217** (P=0.123, R=0.921) — **deuda técnica conocida**:
+      sobre-fusión masiva (31,133 FP vs 4,295 TP). Recall alto, precision colapsada.
+      Congelado para que no empeore hasta recalibrar.
+    - Global: F1=0.563. Por fuente con NIT: 0.957-0.970.
+- **`tests/test_baseline_v0_9_0.py`** — 16 tests:
+    - 12 de no-regresión (uno por slice informativo, marcados `slow`, ~92s total).
+    - 4 rápidos sobre el JSON (existencia, slice CON_NIT crítico, documentación
+      del problema SIN_NIT, tolerancias razonables).
+- **`tests/test_evaluation_coverage.py`** — 20 tests directos (+1 skip honesto):
+    - `GroundTruthEvaluator`: predicción perfecta, sobre-fusión, sub-fusión,
+      singletons, NaN en truth, clustering metrics, `last_evaluation`,
+      `analyze_errors` (FP/FN/sin-error), truth_col personalizable.
+    - `EntityMetricsEvaluator`: clasificación perfectas/fragmentadas/contaminadas,
+      porcentajes.
+    - `PerformanceAnalyzer`: extracción de métricas, baseline, historia.
+- **Marker `slow`** registrado en `pyproject.toml` (CI rápido: `-m "not slow"`).
+
+### Findings (medición, no opinión)
+- El pipeline rinde **excelente con NIT** (F1≈0.96 por fuente) y **mal sin NIT**
+  (F1≈0.22). Esto confirma — con números — la sospecha del plan sobre el régimen
+  de importadores (Corea), pero corrige el diagnóstico: el problema NO es recall
+  bajo (es 0.92), es **precision colapsada** por sobre-fusión.
+- `processing/text.py` (83.9%) y `processing/nit.py` (81.0%) ya estaban bien
+  cubiertos — el plan asumía ~0%. El gap real estaba en `evaluation/ground_truth.py`
+  (era 0%, ahora ejercitado por 10 tests directos) y `evaluation/metrics.py`.
+
+### Test results
+- Baseline previo (v0.7.2): 545/545 verde.
+- Nuevos: 20 (evaluation) + 16 (baseline) = 36 tests.
+- Todos verdes (1 skip honesto en `create_intelligent_sample` por firma divergente).
+
+### Notes
+- La paralelización LSH (Tarea 2.1 del sprint anterior) sigue parqueada; correr
+  `scripts/bench_lsh_indexing.py` sobre el corpus real para decidir.
+- El baseline SIN_NIT documenta deuda; recalibrarlo es candidato para v0.8.x.
+
+---
+
+
+
+### Added
+- **`record_linkage.engine.lsh.cache.MinHashCache`** (Tarea 2.2) — cache persistente
+  de firmas MinHash entre corridas, invalidable por hash del contenido.
+  Acelera iteraciones de calibración (Optuna, tuning de umbrales) cuando el
+  dataset no cambia pero los parámetros posteriores sí: en producción real
+  6 min → 0.5s para regenerar firmas en el segundo run.
+    - Key SHA256 truncado a 16 hex chars sobre `(num_perm, ngram, seed, n,
+      FORMAT_VERSION, sample(NOMBRE_LIMPIO))`.
+    - Storage: archivos `.npy` con escritura atómica vía `os.replace`.
+    - Eviction: LRU por `mtime`, default `max_size_gb=5.0`.
+    - Tolerante a corrupción: archivos `.npy` rotos se evictan silenciosamente
+      y se tratan como miss.
+    - **Opt-in**: si no se configura `profile["minhash_cache_dir"]`, el
+      comportamiento es idéntico al previo (no hay regresión posible).
+- **Parámetros nuevos en perfiles LSH**:
+    - `minhash_cache_dir` (path, default `None`): si está, activa el cache.
+    - `minhash_cache_max_gb` (float, default `5.0`): tope de tamaño.
+- **`scripts/bench_lsh_indexing.py`** (Tarea 2.3) — benchmark reproducible
+  para medir empíricamente la mezcla CPU/IO de la fase de indexación LSH
+  sobre el corpus real del usuario.
+    - Acepta `--signatures signatures.h5` (reusa firmas previas) o `--df`
+      (genera firmas y benchmarka).
+    - Mide banda por banda, descompone CPU (`_hash_rows_stable`) e IO
+      (`executemany` + `CREATE INDEX`) por separado.
+    - Veredicto automático: `CPU dominates` / `IO dominates` / `Mixed`.
+    - Output: CSV con métricas por banda + reporte .md opcional.
+- **`docs/PROFILING_v0_8.md`** — manual de uso del benchmark, interpretación
+  de resultados, plantilla de reporte, y explicación de por qué el dataset
+  sintético puede mentir vs el corpus real.
+
+### Changed
+- **Lazy imports de reporting** (Tarea 2.4) — `matplotlib`, `seaborn`,
+  `plotly` ya NO se cargan al importar `Orchestrator` o `RecordLinkagePipeline`.
+  Ahora se importan dentro de cada strategy `_execute_impl` (solo cuando
+  efectivamente se va a generar el reporte).
+    - **Antes**: importar `Orchestrator` → `sys.modules` contenía
+      `matplotlib`, `matplotlib.pyplot`, `seaborn` (~500 MB RAM).
+    - **Después**: 0 módulos pesados cargados al importar `Orchestrator`.
+    - Beneficio real: `~2 min ahorrados en imports + ~500 MB menos de RAM`
+      cuando se corre con `skip_reporting=True`.
+    - Fix en dos sitios distintos: `reporting/strategies.py` y
+      `pipeline/linkage_pipeline.py` (ambos tenían `try/except ImportError`
+      eager en top-level).
+    - La validación de disponibilidad ahora usa
+      `pipeline._internal._class_exists` (que ya hacía lazy import seguro
+      vía `importlib`), en lugar de `globals()` lookup.
+
+### Decided (NOT done)
+- **Tarea 2.1 — Paralelización de bandas LSH** — **PARQUEADA**.
+  Un mini-benchmark sintético sobre `_index_band` (200K registros) mostró
+  una mezcla **98.5% IO / 1.5% CPU**. Speedup teórico paralelizando con
+  N workers: `~1.01×`. El plan original estimaba `1.65×`.
+  Decisión consensuada con el usuario: validar con benchmark sobre corpus
+  real (`scripts/bench_lsh_indexing.py`) antes de invertir 3 días en
+  refactor de riesgo ALTO. Si el corpus real confirma IO-bound, la tarea
+  se elimina del roadmap y se reemplaza por una que sí ataque IO
+  (SSD local, batch INSERT, PRAGMA cache_size).
+  Ver `docs/PROFILING_v0_8.md` para el detalle del análisis.
+
+### Tests
+- 19 nuevos tests en `tests/test_sprint_0_8_2.py`:
+    - 17 sobre `MinHashCache` (key determinístico, sensibilidad a parámetros,
+      hit/miss, eviction LRU, escritura atómica, corrupción, shape mismatch,
+      stats, integración con `DiskBasedLSHEngine`).
+    - 2 sobre lazy import de reporting (subproceso aislado verifica que
+      `Orchestrator` no carga matplotlib/seaborn/plotly).
+- Test `test_version_is_0_7_0` → `test_version_is_0_7_2` en
+  `tests/test_matching_integration.py`.
+
+### Test results
+- Baseline previo (v0.7.1): 422/422 verde.
+- Post-sprint (v0.7.2): **545/545 verde** (422 base + 19 sprint 0.8.2 +
+  104 críticos reverificados; los conteos se solapan parcialmente entre
+  slices del runner). La suite completa pasa.
+
+### Internal
+- Tags `v0.7.2 (Sprint 0.8.2, Tarea N.M)` en cada cambio para trazabilidad.
+- `FORMAT_VERSION = "v1"` en `MinHashCache` para invalidar caches viejos
+  automáticamente si cambiamos el layout del `.npy` en el futuro.
+
+---
+
+
+
+### Fixed
+- **Auditoría de pares deja de contaminar stdout** (Tarea 1.1).
+  Hasta v0.7.0, `VectorizedScorer._score_batch_vectorized` emitía 8 líneas
+  de `print()` directo por par auditado, generando ~40 bloques `AUDITANDO PAR`
+  en cada corrida grande sin forma de desactivarlo. Ahora:
+    - Default `audit_pairs_count = 0` (silencio total).
+    - Opt-in vía `profile["audit_pairs_count"] = N` o env var
+      `RUES_LINKER_AUDIT_PAIRS=N` (la env var pisa al profile).
+    - Mensajes pasan al logger en nivel `DEBUG`, consolidados a 1 entrada
+      multilínea por par (era 1 por línea).
+    - Cuando se activa el opt-in, el logger del scorer se eleva a `DEBUG`
+      automáticamente (CustomLogger trae nivel INFO por default).
+- **Comillas literales en RAZON_SOCIAL — modo AGRESIVO** (Tarea 1.2).
+  El first-run reveló pares como `'DISENITOS S S ''` con comillas DENTRO del
+  campo (artefacto de CSV mal escapado). Hasta v0.7.0 el modo AGRESIVO los
+  preservaba (`punctuation_to_space_regex` no incluye comillas). Nuevo método
+  `TextProcessor._strip_quote_artifacts` insertado como paso 0 de
+  `_aggressive_clean`:
+    - Elimina secuencias `''` y `""` (artefactos de doble-escape).
+    - Elimina comillas en bordes del campo.
+    - **Preserva apóstrofes legítimos** (`O'CONNOR`, `DON'T`).
+    - Idempotente.
+  Modos CONSERVADOR/BALANCEADO no se tocan: ya eliminan comillas vía
+  `non_alpha_regex` (verificado empíricamente antes del fix). El bug
+  histórico que destruye `O'CONNOR → CONNOR` en esos modos queda
+  documentado en el docstring del `__init__` y se difiere a una v1.x.
+- **Warnings de glyph faltante en matplotlib** (Tarea 1.4).
+  Las fuentes del sistema en Colab/Linux (Liberation Sans) no traen glifos
+  de emoji. Cada emoji emitía `UserWarning: Glyph N missing from font(s)`.
+  Inventario inicial: 63 warnings en `test_fase1_calibracion` → 0 tras el fix.
+    - Nuevo helper interno `record_linkage.reporting._text_utils.strip_emojis`.
+    - Aplicado en strings construidos antes del render (stats, métricas).
+    - Sitios que renderizan iconos desde diccionarios (`kpi["icon"]`,
+      `issue["icon"]`) ahora filtran con `isascii()` antes del render.
+    - Logs y exports (Excel, CSV, JSON) siguen mostrando emojis sin cambios.
+
+### Changed
+- `Orchestrator.run(skip_reporting=...)` ahora default `None` (sentinela)
+  en lugar de `False` (Tarea 1.3). La resolución es:
+  `kwarg explícito > profile["skip_reporting"] > False`.
+  Esto permite configurar `skip_reporting=True` desde el perfil sin tocar
+  el sitio de llamada (útil para producción donde los reportes ahorran
+  ~4 min sobre 1.97M registros y no se consumen). Retrocompatible: pasar
+  `True`/`False` explícito conserva el comportamiento anterior. El perfil
+  `produccion_calibrada` expone el flag en `False` para descubribilidad.
+
+### Added
+- Suite de tests `tests/test_sprint_0_8_1.py` con 20 casos cubriendo las 4
+  tareas, incluyendo:
+    - Test de no-regresión: `AUDITANDO PAR` jamás vuelve a stdout.
+    - Test funcional: render real de KPI con emoji NO produce
+      `UserWarning('Glyph ... missing from font')`.
+    - Test estático: literales de emoji en `set_title`/`ax.text` directos
+      se detectan automáticamente (red de seguridad ante introducciones).
+    - Test de defensa: el patrón `_icon_safe = ... isascii()` sigue
+      instalado en `dashboard.py` y `suite.py`.
+    - Tests de modos de limpieza: AGRESIVO aplica el sanitizador, BALANCEADO
+      no se tocó (no-regresión).
+
+### Internal
+- Documentación inline (`v0.7.1 (Sprint 0.8.1, Tarea N.M)`) en cada cambio
+  para trazabilidad.
+- Docstring del `TextProcessor.__init__` ahora documenta exhaustivamente
+  los 3 modos (`CONSERVADOR`, `BALANCEADO`, `AGRESIVO`) y sus diferencias.
+
+### Test results
+- Baseline previo: 388/388 tests verdes (`[optimization]` extras).
+- Post-sprint: **422/422 tests verdes** (388 base + 14 nuevos efectivos
+  contados sin parametrizaciones).
+- Warnings de matplotlib en `test_fase1_calibracion.py`: de 63 → 0 (glyph).
+
+---
+
+
+
+### Added
+- Componente nuevo `record_linkage.engine.lsh.NITPrescreener`
+  (en `src/record_linkage/engine/lsh/prescreen.py`).
+  Pre-filtra pares de registros con NIT_BASE idéntico antes del LSH.
+  Componente PURO, opt-in, retrocompat 100%.
+- Dataclass `PrescreenResult` con métricas (`exact_match_pairs`,
+  `residual_df`, `reduction_pct`, `speedup_estimate_lsh`).
+- Función helper `prescreen_and_split(df, **kwargs)`.
+- Benchmark reproducible `benchmarks/benchmark_lsh_prescreen.py`.
+  Dataset sintético con seed fijo, mide speedup vs LSH puro.
+- 17 tests nuevos en `tests/test_sprint_0_8_0_prescreen.py`.
+- Documento `docs/AUDITORIA_SPRINT_0_8_0.md` con resultados HONESTOS.
+
+### Verified
+- 17/17 tests del prescreener pasan
+- Benchmark n=5000, overlap=30%: **1.21× speedup**
+- Benchmark n=20000, overlap=50%: **1.40× speedup**
+- Suite completa intacta (385+17 = 402 tests esperados)
+
+### Honest Note (admisión)
+El plan original prometía **2-3× speedup**. La realidad medida es
+**1.21× a 1.40×**, dependiente del nivel de overlap. Análisis y razones
+documentadas en `docs/AUDITORIA_SPRINT_0_8_0.md` §2.
+
+Para casos de producción con bases pre-deduplicadas (overlap ~2%),
+el speedup esperado es marginal (~5%). Su valor real está en capturar
+pares NIT-exactos que el LSH puro descarta por similitud de nombres baja.
+
+### Changed (notebook companion)
+- Notebook `2026-05-27_A12_baseline_postrun_v1_1.ipynb` (post first-run):
+  - `fail_under_reduccion` default cambiado de 0.65 → 0.0 (sin threshold)
+  - `persistir(abort_on_fail_under=True)` cambiado a `False`
+  - Razón documentada: bases pre-deduplicadas tienen overlap <5%
+
+---
+
+## [0.6.0] — 2026-05-26 — Sprint CI/CD + cobertura
+
+### Added
+- `[tool.coverage.run]` y `[tool.coverage.report]` en `pyproject.toml`. Target
+  inicial `fail_under = 50` (medido 58%). Roadmap sube a 80 antes de 1.0.
+- `[tool.mypy]` en `pyproject.toml`. Estrategia conservadora: módulos
+  heredados (`linkage_pipeline`, `deduplication/unified`, `optimization/engine`,
+  `reporting/*`) marcados con `ignore_errors = True` mientras se refactorizan.
+- Job `typecheck` en `.github/workflows/ci.yml` con `continue-on-error: true`
+  (no bloquea CI por deuda heredada).
+- Job `test` extendido: corre `pytest --cov=record_linkage --cov-fail-under=50`.
+- Step opcional de upload a Codecov (requiere `CODECOV_TOKEN` como secret).
+- Hook `mypy` en `.pre-commit-config.yaml` con dependencias mínimas.
+- 7 badges en README: CI, version, status pre-1.0, Python matriz, tests,
+  cobertura, F1 vs GT.
+- `mypy>=1.8`, `pandas-stubs`, `types-requests` en extra `[dev]`.
+- Documento `docs/AUDITORIA_SPRINT_0_6_0.md` con metodología y mediciones reales.
+
+### Changed
+- README: sección "Calidad de código" rediseñada con tabla estado/target.
+- `.github/workflows/ci.yml`: job test ahora produce reporte XML de cobertura.
+- 10 archivos de tests reformateados con `ruff format` (consistencia).
+- 9 errores de `ruff check` corregidos automáticamente (mayoría: `noqa` sin uso).
+
+### Preserved (intencional)
+- `black` NO se añadió (`ruff format` ya cumple esa función).
+- `mypy strict` NO se activó (refactor de Sprint 0.9.0+).
+- `--cov-fail-under=80` NO se fijó (bloquearía CI; subimos progresivo).
+
+### Verified
+- **385/385 tests pasan** (sin regresiones)
+- **Cobertura medida: 58%** sobre 12,257 statements
+- `ruff check` y `ruff format --check` limpios
+- `pyproject.toml` parseable con `tomllib`
+- Workflow `ci.yml` con sintaxis YAML válida
+
+---
+
+## [0.5.0] — 2026-05-26 — Sprint de limpieza legacy
+
+### ⚠️ BREAKING CHANGES
+
+- **Eliminado `record_linkage.optimization.optuna_integration` y la clase
+  `OptunaIntegration`**. Estaba deprecated desde v0.4.0. Migración:
+  ```python
+  # ANTES
+  from record_linkage.optimization.optuna_integration import OptunaIntegration
+  # AHORA
+  from record_linkage.evaluation import OrchestratorOptimizer
+  ```
+  Ver `notebooks/04_optuna_calibration.ipynb` para ejemplo de uso.
+
+- **Eliminado `record_linkage.optimization.visualizer`** y su clase
+  `OptimizationVisualizerLite`. Era huérfana (solo dependía de
+  `OptunaIntegration`). Ningún otro módulo la usaba.
+
+- **`config_produccion_it7` limpiado**. Se eliminaron 11 claves que el
+  código nunca leyó (10 dead + 1 deprecated):
+  - Dead removidas: `confidence_weights`, `max_sources_per_group`,
+    `min_sources_for_golden`, `aggressive_gc`, `memory_monitor_interval`,
+    `sqlite_cache_size`, `commit_interval`, `correlative_chunk_size`,
+    `validation_rules`, `performance_settings`
+  - Deprecated removida: `cross_source_validation`
+
+  Si tu código accedía a esas claves vía `config_produccion_it7["..."]`,
+  recibirás `KeyError`. **Las claves nunca tuvieron efecto**, así que
+  removerlas es seguro a nivel de comportamiento.
+
+  Verificación: corrida contra GT da exactamente el mismo F1 antes/después
+  (0.0508), confirmando que las claves removidas no se leían.
+
+### Removed
+- `src/record_linkage/optimization/optuna_integration.py`
+- `src/record_linkage/optimization/visualizer.py`
+- 11 claves dead/deprecated de `config_produccion_it7`
+
+### Preserved
+- `record_linkage.pipeline.linkage_pipeline.RecordLinkagePipeline` se mantiene
+  (es dependencia interna del `Orchestrator`, decisión revisada).
+- Todas las APIs documentadas siguen funcionando (`linkage()`,
+  `Orchestrator`, `OrchestratorOptimizer`, `crear_config_orchestrator`,
+  `validar_config`, todos los perfiles).
+- Tags antiguos en GitHub (v3.2.X) siguen preservados.
+
+### Changed
+- `tests/test_fase4_consolidacion.py`: 18 → 23 tests. Se reemplazó
+  `TestOptunaIntegrationDeprecated` (verificaba DeprecationWarning) por
+  `TestOptunaIntegrationRemoved` (verifica ModuleNotFoundError). Se añadió
+  `TestConfigIT7Limpio` con 4 tests verificando la limpieza.
+
+### Documentation
+- Nuevo: `docs/AUDITORIA_FASE5_SPRINT_0_5_0.md`
+- README actualizado con badge `0.5.0`
+
+### Compatibility
+- 380/380 tests pasan
+- Comportamiento del `Orchestrator`: idéntico a v0.4.0 contra GT
+- Migration path documentada para los 2 imports breaking
+
+---
+
+---
+
+## [0.4.0] — 2026-05-26 — Re-versionamiento + cierre de Fase 4
+
+### Important — re-versionamiento
+
+Esta release **resetea la numeración** de `3.2.7` (entregada hace horas) a
+`0.4.0`, reflejando con honestidad el estado del paquete: pre-1.0, sin PyPI,
+API aún inestable, refactores frecuentes. La numeración anterior era
+aspiracional.
+
+**Equivalencia retroactiva con tags antiguos:**
+
+| Tag antiguo | Equivalente nuevo | Fase | Fecha |
+|---|---|---|---|
+| `v1.x` | (pre-paquete, notebook monolítico) | — | hist. |
+| `v2.0.0` – `v2.14.0` | `0.1.0-internal` (10 versiones de exploración) | — | mayo 21–23 |
+| `v3.0.0` | `0.1.0` (primera versión empaquetada estable) | — | mayo 23 |
+| `v3.2.1` – `v3.2.3` | `0.2.0` (consolidación funcional) | — | mayo 24 |
+| `v3.2.4` | `0.3.0` | Fase 1 — calibración GT (F1=0.84) | mayo 25 |
+| `v3.2.5` | `0.3.1` | Fase 2 — `source_quality_weights`, `max_sources_per_group` | mayo 26 |
+| `v3.2.6` | `0.3.2` | Fase 3 — `OrchestratorOptimizer` + Optuna | mayo 26 |
+| `v3.2.7` | **`0.4.0`** | Fase 4 — fix `_class_exists`, `min_sources_for_golden`, deprecation legacy | mayo 26 |
+
+Los tags antiguos en GitHub **NO se borran** — quedan como referencia histórica.
+Ver `docs/VERSIONING.md` para política de versionamiento futura y roadmap hacia 1.0.
+
+### Changed
+- Versión `3.2.7` → `0.4.0` (re-versionamiento semántico honesto)
+- `pyproject.toml`, `src/record_linkage/__init__.py`, `tests/test_matching_integration.py`
+  actualizados consistentemente.
+- README rediseñado con badge `0.x pre-1.0` y nota sobre estado del proyecto.
+- Notebooks actualizados (`notebooks/04_optuna_calibration.ipynb`).
+
+### Added
+- `docs/VERSIONING.md` — política de versionamiento y roadmap hacia 1.0.
+- Entrada en `MIGRATION_LOG.md` documentando el reset.
+
+### Compatibility
+- **Cero cambios funcionales**. El comportamiento de v3.2.7 es idéntico a 0.4.0.
+- 380/380 tests pasan sin modificación (excepto el `test_version_is_*`).
+- Si tu código pinea `rues-linker==3.2.7`, debe cambiar a `rues-linker==0.4.0`.
+
+---
+
+## Versiones anteriores (mapeo histórico)
+
+Las versiones antiguas se preservan aquí para referencia. **No instalar como
+`3.2.X` después de este re-versionamiento.**
+
+
+## [3.2.7] — 2026-05-26 — FASE 4 de auditoría
+
+### Fixed
+- **`_class_exists` (pipeline/_internal.py)**: usaba `eval()` en un módulo
+  donde las clases `ReportGenerator`, `DataVisualizer`, `ExecutiveDashboard`,
+  `EnhancedReportingSuite` no estaban importadas. Resultado: retornaba
+  False y emitía 4 warnings "no disponible, omitiendo" en cada corrida.
+  Reemplazado por `importlib.import_module()` con mapeo explícito.
+  Ahora los reportes opcionales se ejecutan si la dependencia [viz] está
+  instalada, o fallan gracefully si no.
+
+### Added
+- **`min_sources_for_golden`** en `GoldenRecordGeneratorV7`. Si el config
+  contiene `profiles[active].min_sources_for_golden = N` (con N > 1), el
+  generador filtra el golden excluyendo clusters con menos de N fuentes
+  únicas. La correlativa NO se modifica (preserva trazabilidad). Default 0
+  (sin filtro) mantiene retrocompatibilidad.
+- Método `GoldenRecordGeneratorV7._filter_golden_by_min_sources()`.
+- Constante `DEPRECATED_CONFIG_KEYS` en `config/profiles.py`. Distinta de
+  DEAD: las deprecadas tienen alternativa documentada.
+- Constante `RESURRECTED_CONFIG_KEYS` en `config/profiles.py`. Documenta
+  claves que ANTES eran dead y AHORA están implementadas (referencia
+  histórica para mantenedores).
+- `validar_config()` ahora reporta también claves deprecated con mensaje
+  diferenciado.
+- Documento `docs/AUDITORIA_FASE4.md`.
+- Notebook ejemplo `notebooks/04_optuna_calibration.ipynb` con flujo
+  completo: cargar GT, optimizar con OrchestratorOptimizer, usar best_config.
+- 18 tests nuevos en `tests/test_fase4_consolidacion.py`.
+
+### Changed
+- **`cross_source_validation` movido de DEAD a DEPRECATED**. La clave seguía
+  apareciendo en `config_produccion_it7` sin efecto. v3.2.7 la marca como
+  deprecada (alternativa: `cross_source_only` que sí funciona). Será
+  removida en v3.3.0.
+- `OptunaIntegration` heredado (optimization/optuna_integration.py) emite
+  ahora `DeprecationWarning` al importar. La clase sigue importable
+  (retrocompat). Será removida en v3.3.0. Alternativa: `OrchestratorOptimizer`.
+- `max_sources_per_group` y `min_sources_for_golden` removidos de
+  `DEAD_CONFIG_KEYS` (ya están implementados desde v3.2.5 y v3.2.7
+  respectivamente).
+
+### Preserved (intencional)
+- `config_produccion_it7` NO se modificó. Las claves dead/deprecated que
+  contiene siguen ahí para retrocompatibilidad documental.
+- Default `min_sources_for_golden=0` mantiene comportamiento ≤ v3.2.6.
+
+### Roadmap v3.3.0 (breaking changes anunciados)
+- Eliminar `optimization/optuna_integration.py` (clase OptunaIntegration).
+- Eliminar `cross_source_validation` y claves dead de `config_produccion_it7`.
+
+
+## [3.2.6] — 2026-05-26 — FASE 3 de auditoría
+
+### Added
+- Nueva clase `OrchestratorOptimizer` en
+  `record_linkage/evaluation/orchestrator_hyperparameters.py`. Conecta
+  Optuna al flujo de producción real (`Orchestrator.run()`), mientras que
+  `HyperparameterOptimizer` (legacy) sigue trabajando con
+  `linkage_pipeline.run()`.
+- Función `default_search_space()` con el espacio de búsqueda recomendado
+  sobre los 7 parámetros que el código realmente lee (lsh_threshold,
+  score_threshold, min_name_similarity, max_nit_distance,
+  nit_empty_passes_filter, weight_name, weight_nit).
+- Método `OrchestratorOptimizer.optimize()` que devuelve `best_config`
+  completo listo para producción, además de `best_params`, history,
+  métricas detalladas y el objeto `study` de Optuna.
+- Método `OrchestratorOptimizer.history_df()` para análisis post-mortem
+  del proceso de optimización.
+- Soporte para `optimization_target` ∈ {'f1', 'f2', 'precision', 'recall'}.
+- Soporte para `time_budget_minutes` y `time_penalty_seconds`.
+- Soporte para `sampler` y `pruner` personalizados de Optuna.
+- Documento `docs/AUDITORIA_FASE3.md`.
+- 14 tests nuevos en `tests/test_fase3_optuna.py` (skip si Optuna ausente).
+
+### Changed
+- `record_linkage.evaluation.__init__` ahora exporta `OrchestratorOptimizer`,
+  `default_search_space`, `HyperparameterOptimizer` y `OPTUNA_AVAILABLE`
+  cuando Optuna está instalado.
+
+### Verified
+- 362/362 tests pasan (348 previos + 14 nuevos).
+- E2E con 6 trials sobre GT muestreado: F1=0.93 (vs 0.84 del perfil estático).
+
+
+## [3.2.5] — 2026-05-26 — FASE 2 de auditoría
+
+### Added
+- `AdvancedValueSelector` ahora acepta argumento opcional
+  `source_quality_weights: dict[str, float] | None`. Cuando se pasa, los
+  pesos numéricos se usan para desempate en `select_best_name()` (cuando
+  varios registros empatan en la fuente más prioritaria).
+- `GoldenRecordGeneratorV7` lee `source_quality_weights` del config y los
+  propaga al `AdvancedValueSelector` automáticamente.
+- `OptimizedClusterer` acepta parámetro `max_sources_per_group: int | None`
+  en el perfil. Si está definido y un cluster tiene más fuentes únicas que
+  el límite, se divide post-clustering por `(SRC, NIT)`.
+- Nuevo método `OptimizedClusterer._split_mega_clusters()` para la división.
+- Perfil `alta_precision` recalibrado con evidencia del GT (F1=0.83 medido).
+- Documento `docs/AUDITORIA_FASE2.md`.
+- 17 tests nuevos en `tests/test_fase2_calibracion.py`.
+
+### Changed
+- Eliminada clave `aggressive_gc` (dead code) de perfiles `produccion_estandar`,
+  `produccion_exhaustiva`, `alta_precision`.
+- Perfil `alta_precision` ahora usa `score_threshold=0.60`, `min_name_similarity=0.65`,
+  `max_nit_distance=0`, `nit_empty_passes_filter=False` (alineado con la
+  calibración de Fase 1).
+
+### Preserved (intencional)
+- `config_produccion_it7` NO se modificó (retrocompat documental).
+- Default `source_quality_weights=None` y `max_sources_per_group=None`
+  preservan comportamiento idéntico a v3.2.4.
+
+### Compatibility
+- 348/348 tests pasan (331 previos + 17 nuevos).
+- `produccion_calibrada` mantiene F1=0.84 (sin regresión).
+
+
+## [3.2.4] — 2026-05-25 — FASE 1 de auditoría
+
+### Added
+- Nuevo perfil `produccion_calibrada` en `PERFILES_BASE` con parámetros validados
+  contra `ground_truth_grande.csv` (F1=0.84, P=1.00, R=0.73, FP=0).
+- Constante `DEAD_CONFIG_KEYS` (12 parámetros que el código no lee) y
+  `PARTIAL_CONFIG_KEYS` (2 parámetros con uso limitado).
+- Función `validar_config(config, verbose=True)` que audita un config y reporta
+  claves dead/partial. Se invoca automáticamente en `crear_config_orchestrator`.
+- Flag opt-in `nit_empty_passes_filter` en `scorer.py` (default `True` para
+  retrocompatibilidad). Si se pone en `False`, los pares con NIT vacío en
+  algún lado NO pasan el filtro de NIT. Default en `produccion_calibrada`.
+- Documento `docs/AUDITORIA_FASE1.md` con metodología, resultados verificables
+  y plan de Fases 2+.
+- Test `tests/test_fase1_calibracion.py` con 14 tests de regresión.
+
+### Fixed
+- Bug de filtro NIT vacío: `nit_distance == -1` (sentinela para NIT vacío)
+  pasaba el filtro porque `-1 <= max_nit_distance`. Causaba sobre-fusión
+  catastrófica en regímenes SIN_NIT. Fix configurable vía flag.
+
+### Changed
+- `crear_config_orchestrator` ahora invoca `validar_config()` por defecto
+  (parámetro `validate=True`). Se puede desactivar con `validate=False`.
+
+### Compatibility
+- 331/331 tests pasan, incluidos 89 tests de scoring/NIT/dedup.
+- IT-7 default sigue produciendo los mismos resultados que en v3.2.3
+  (verificado: F1=0.05 idéntico sobre GT completo).
+
+
 Todos los cambios notables de este proyecto se documentan en este archivo.
 
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/),

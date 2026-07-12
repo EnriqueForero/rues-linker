@@ -43,17 +43,13 @@ from ..pipeline._internal import _class_exists
 from ._flags import PYARROW_AVAILABLE
 from .reports import ReportGenerator
 
-# Solo dashboard, suite y visualizer usan matplotlib/seaborn/plotly (extra
-# [viz]). Si no están instaladas, quedan como None y el pipeline core opera
-# sin reportes gráficos.
-try:
-    from .dashboard import ExecutiveDashboard
-    from .suite import EnhancedReportingSuite
-    from .visualizer import DataVisualizer
-except ImportError:  # pragma: no cover - depende del extra [viz]
-    ExecutiveDashboard = None  # type: ignore[assignment,misc]
-    EnhancedReportingSuite = None  # type: ignore[assignment,misc]
-    DataVisualizer = None  # type: ignore[assignment,misc]
+# v0.7.2 (Sprint 0.8.2, Tarea 2.4): los imports de ExecutiveDashboard,
+# EnhancedReportingSuite y DataVisualizer se hacen LAZY dentro de cada
+# strategy._execute_impl (NO en top-level). Estos módulos arrastran
+# matplotlib/seaborn (~500 MB en RAM), y antes se cargaban siempre que
+# alguien importara `Orchestrator` — incluso con skip_reporting=True.
+# La validación de disponibilidad sigue ocurriendo en `is_available()`
+# vía `_class_exists()`, que ya hace lazy import internamente.
 
 
 class Phase(Enum):
@@ -529,6 +525,10 @@ class VisualizationsStrategy(BaseReportingStrategy):
         return "DataVisualizer"
 
     def _execute_impl(self, ctx: ReportingContext, logger: logging.Logger) -> list[Path]:
+        # v0.7.2 (Tarea 2.4): lazy import — matplotlib/seaborn solo se cargan
+        # cuando se va a generar visualizaciones realmente.
+        from .visualizer import DataVisualizer
+
         # Enriquecer métricas con información de tiempo
         metrics_enriched = ctx.metrics.copy()
         metrics_enriched["phase_times"] = ctx.phase_times
@@ -563,6 +563,9 @@ class DashboardStrategy(BaseReportingStrategy):
         return "ExecutiveDashboard"
 
     def _execute_impl(self, ctx: ReportingContext, logger: logging.Logger) -> list[Path]:
+        # v0.7.2 (Tarea 2.4): lazy import.
+        from .dashboard import ExecutiveDashboard
+
         # Enriquecer métricas
         metrics_enriched = ctx.metrics.copy()
         metrics_enriched["phase_times"] = ctx.phase_times
@@ -609,6 +612,9 @@ class EnhancedInsightsStrategy(BaseReportingStrategy):
         return "EnhancedReportingSuite"
 
     def _execute_impl(self, ctx: ReportingContext, logger: logging.Logger) -> list[Path]:
+        # v0.7.2 (Tarea 2.4): lazy import.
+        from .suite import EnhancedReportingSuite
+
         metrics_enriched = ctx.metrics.copy()
         metrics_enriched["phase_times"] = ctx.phase_times
         metrics_enriched["execution_time"] = time.time() - ctx.start_time if ctx.start_time else 0

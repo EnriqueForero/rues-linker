@@ -45,6 +45,7 @@ env/
 mnt/
 record_linkage.egg-info/
 rues_linker.egg-info/
+runs/
 venv/
 
 
@@ -82,9 +83,13 @@ secrets.json
 # Estas reglas DEBEN ser las últimas del archivo.
 # En .gitignore la última coincidencia gana; si una regla
 # de exclusión aparece después de una excepción, la anula.
+!notebooks/Cruce_universal_de_dos_bases.ipynb
+!notebooks/Nearshoring_tres_fuentes.ipynb
 !notebooks/calibracion_produccion.ipynb
 !notebooks/ejecutar.ipynb
+!notebooks/fuente_unica.ipynb
 !notebooks/produccion_4fuentes.ipynb
+!notebooks/prueba_datos_reales_rues-linker_v0_7_5.ipynb
 !tests/data/golden_truth.csv
 !tests/data/golden_truth_exhaustivo.csv
 !tests/data/golden_truth_exhaustivo_ciudad.csv

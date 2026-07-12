@@ -55,12 +55,54 @@ class GoldenRecordGeneratorV7:
         Args:
             source_priority: Lista de fuentes en orden de prioridad
             config: Configuración opcional del generador
+
+        v3.2.5 (FASE 2): si `config` contiene `source_quality_weights` (dict
+        de pesos numéricos por fuente), se propaga al `AdvancedValueSelector`
+        para desempates en nombres.
         """
         self.source_priority_list = source_priority
         self.source_priority_map = {src: i for i, src in enumerate(source_priority)}
+
+        # v3.2.5: extraer pesos numéricos si están disponibles en el config
+        # del perfil activo. Mantiene retrocompatibilidad: si no existen, el
+        # selector usa solo el orden de prioridad (comportamiento <= v3.2.4).
+        source_quality_weights: dict[str, float] | None = None
+        if config:
+            # Buscar en el perfil activo dentro de profiles{}, y también top-level
+            active_profile_name = config.get("profile")
+            if active_profile_name and "profiles" in config:
+                active_prof = config["profiles"].get(active_profile_name, {})
+                sqw = active_prof.get("source_quality_weights")
+                if isinstance(sqw, dict) and sqw:
+                    source_quality_weights = {str(k): float(v) for k, v in sqw.items()}
+            # Fallback: buscar top-level (algunos pipelines lo pasan ahí)
+            if source_quality_weights is None:
+                sqw = config.get("source_quality_weights")
+                if isinstance(sqw, dict) and sqw:
+                    source_quality_weights = {str(k): float(v) for k, v in sqw.items()}
+
+        self.source_quality_weights = source_quality_weights or {}
         self.value_selector = AdvancedValueSelector(
-            self.source_priority_map
+            self.source_priority_map,
+            source_quality_weights=source_quality_weights,
         )  # Instanciar el selector avanzado
+
+        # v3.2.7 (FASE 4): min_sources_for_golden — filtro post-generación.
+        # Si está definido y > 1, los golden records que provengan de
+        # clusters con menos fuentes únicas que el límite son EXCLUIDOS del
+        # golden. La correlativa NO se modifica (conserva los registros
+        # originales para que el usuario pueda reconstruir si lo necesita).
+        # Default None o 0 o 1 → sin filtro (retrocompat).
+        # Localización extracción: profiles[active] → top-level → 0.
+        min_src_raw: int = 0
+        if config:
+            active_name = config.get("profile")
+            if active_name and "profiles" in config:
+                active_prof = config["profiles"].get(active_name, {})
+                min_src_raw = int(active_prof.get("min_sources_for_golden") or 0)
+            if min_src_raw == 0:
+                min_src_raw = int(config.get("min_sources_for_golden") or 0)
+        self.min_sources_for_golden: int = max(0, min_src_raw)
 
         # Configuración con valores optimizados
         cfg = self.config = config or {}
@@ -956,7 +998,60 @@ class GoldenRecordGeneratorV7:
             f"✅ Cargados {len(golden):,} golden records y {len(correl):,} registros correlativos"
         )
 
+        # v3.2.7 (FASE 4): filtrar golden por min_sources_for_golden.
+        # Política: el filtro se aplica SOLO al golden (no a correlativa)
+        # para preservar trazabilidad. Si el usuario necesita los descartados,
+        # puede reconstruirlos desde la correlativa.
+        if self.min_sources_for_golden > 1 and "ID_GRUPO" in correl.columns:
+            golden = self._filter_golden_by_min_sources(golden, correl)
+
         return golden, correl
+
+    def _filter_golden_by_min_sources(
+        self, golden: pd.DataFrame, correl: pd.DataFrame
+    ) -> pd.DataFrame:
+        """v3.2.7 (FASE 4): excluye del golden los clusters con menos de
+        `min_sources_for_golden` fuentes únicas.
+
+        No modifica la correlativa. La operación es idempotente.
+
+        Args:
+            golden: DataFrame de golden records.
+            correl: DataFrame correlativa con columnas 'ID_GRUPO' y 'SRC'.
+
+        Returns:
+            golden filtrado.
+        """
+        if "SRC" not in correl.columns or "ID_GRUPO" not in correl.columns:
+            self.logger.warning(
+                "min_sources_for_golden activo pero falta 'SRC' o 'ID_GRUPO' "
+                "en correlativa; saltando filtro."
+            )
+            return golden
+
+        # Contar fuentes únicas por ID_GRUPO
+        sources_per_group = correl.groupby("ID_GRUPO")["SRC"].nunique()
+        valid_groups = set(
+            sources_per_group[sources_per_group >= self.min_sources_for_golden].index
+        )
+
+        n_before = len(golden)
+        if "ID_GRUPO" not in golden.columns:
+            self.logger.warning(
+                "golden sin columna 'ID_GRUPO'; saltando filtro min_sources_for_golden."
+            )
+            return golden
+
+        golden_filtered = golden[golden["ID_GRUPO"].isin(valid_groups)].copy()
+        n_excluded = n_before - len(golden_filtered)
+
+        self.logger.info(
+            f"🪒 min_sources_for_golden={self.min_sources_for_golden}: "
+            f"excluidos {n_excluded:,} golden records "
+            f"({n_before:,} → {len(golden_filtered):,})"
+        )
+
+        return golden_filtered
 
     def _add_diagnostic_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
         """

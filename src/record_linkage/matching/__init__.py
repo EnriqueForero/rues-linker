@@ -80,7 +80,7 @@ __all__ = [
     "ExactWithDV",
     # Comparadores - Nombres
     "JaroWinklerSigned",
-    # Integración con pipeline (v3.2.0)
+    # Integración con pipeline
     "MatcherPostProcessor",
     # Spec
     "MatchingProfile",
@@ -103,8 +103,8 @@ __all__ = [
 def default_colombia_profile() -> MatchingProfile:
     """Profile por defecto BALANCEADO (mejor F1) para entidades colombianas.
 
-    Calibración v3.2.0: óptimo de F1 global medido E2E sobre GT sintético
-    grande v2.14.0 (12,427 registros).
+    Calibración: óptimo de F1 global medido E2E sobre el GT sintético
+    grande (12,427 registros).
 
     Parámetros óptimos por barrido empírico:
         - min_concordances_with_nit=2
@@ -122,7 +122,7 @@ def default_colombia_profile() -> MatchingProfile:
         └─────────────────────────┴────────┴──────────┴──────────┘
 
     NOTA SOBRE AUDITORÍA EXTERNA:
-        La auditoría externa de v3.1.0 (octubre 2026) señaló que K=1 sobre
+        Una revisión posterior señaló que K=1 sobre
         pares aleatorios da F1=0.08. La medición es correcta para pares
         aleatorios pero NO refleja el flujo E2E real (donde el matcher actúa
         como post-procesador de un baseline ya filtrado por LSH+scorer).
@@ -186,10 +186,10 @@ def default_colombia_profile() -> MatchingProfile:
         score_threshold=0.50,
         require_city_match=False,
     )
-    profile.calibration_source = "synthetic_v2.14.0_optimized_v3.2.0"
+    profile.calibration_source = "synthetic_optimized"
     profile.calibration_notes = (
-        "BALANCEADO: maximiza F1 global. Calibrado en v3.2.0 por barrido E2E "
-        "sobre GT sintético v2.14.0. Mejor F1: 0.908 (vs baseline 0.873). "
+        "BALANCEADO: maximiza F1 global. Calibrado por barrido E2E "
+        "sobre GT sintético. Mejor F1: 0.908 (vs baseline 0.873). "
         "Mejor F1 SIN_NIT: 0.732 (vs 0.629). NO calibrado contra datos reales."
     )
     return profile
@@ -205,7 +205,7 @@ def default_colombia_profile_conservative() -> MatchingProfile:
         - min_concordances_without_nit=2 (exige 2 variables concordantes)
         - score_threshold=0.40
 
-    Métricas E2E (sobre GT sintético v2.14.0):
+    Métricas E2E (sobre GT sintético):
         - F1 global: 0.876 (apenas mejor que baseline 0.873)
         - **Precision SIN_NIT: 0.964** (vs baseline 0.559) ← lo destacable
         - Recall SIN_NIT: 0.290 (cae mucho)
@@ -217,7 +217,7 @@ def default_colombia_profile_conservative() -> MatchingProfile:
     profile.name = "default_colombia_conservative"
     profile.min_concordances_without_nit = 2
     profile.score_threshold = 0.40
-    profile.calibration_source = "synthetic_v2.14.0_conservative_v3.2.0"
+    profile.calibration_source = "synthetic_conservative"
     profile.calibration_notes = (
         "CONSERVADOR: maximiza Precision (>0.99 en SIN_NIT) a costa de Recall. "
         "Usar en KYC, anti-fraude, regulación. NO calibrado con datos reales."
@@ -235,7 +235,7 @@ def default_colombia_profile_recall() -> MatchingProfile:
         - min_concordances_without_nit=1
         - score_threshold=0.40
 
-    Métricas E2E (sobre GT sintético v2.14.0):
+    Métricas E2E (sobre GT sintético):
         - F1 global: 0.897
         - Recall SIN_NIT: 0.714 (mejor recall que el balanced)
         - Precision SIN_NIT: 0.684 (menor que el balanced 0.790)
@@ -247,7 +247,7 @@ def default_colombia_profile_recall() -> MatchingProfile:
     profile.name = "default_colombia_recall"
     profile.min_concordances_without_nit = 1
     profile.score_threshold = 0.40
-    profile.calibration_source = "synthetic_v2.14.0_recall_v3.2.0"
+    profile.calibration_source = "synthetic_recall"
     profile.calibration_notes = (
         "AGRESIVO: maximiza Recall (0.714 SIN_NIT) con Precision moderada "
         "(0.684 SIN_NIT). Usar para enriquecimiento con revisión humana."

@@ -345,7 +345,7 @@ class Orchestrator:
         self,
         from_phase: Phase = None,
         experiment: str | None = None,
-        skip_reporting: bool = False,
+        skip_reporting: bool | None = None,
         force_rerun_phases: set[Phase] | list[Phase] | None = None,
     ) -> dict[str, Any]:
         """
@@ -362,8 +362,16 @@ class Orchestrator:
                        Útil para re-ejecutar con cambios de configuración.
             experiment: Nombre del experimento para guardar snapshot.
                        Permite comparar diferentes configuraciones.
-            skip_reporting: Si True, omite la fase L6.
-                           Útil para ejecuciones de prueba rápida.
+            skip_reporting: Si ``True``, omite la fase L6.
+                Útil para ejecuciones de prueba rápida o para producción
+                cuando los reportes no se necesitan (ahorra ~4 min en el
+                pipeline calibrado de 1.97M registros).
+
+                **v0.7.1** (Sprint 0.8.1, Tarea 1.3): si se pasa ``None``
+                (default), se lee ``profile["skip_reporting"]``; si tampoco
+                está, se usa ``False``. Esto permite configurar el comportamiento
+                desde el perfil sin tocar el sitio de llamada. Precedencia:
+                kwarg explícito > profile > default False.
             force_rerun_phases: (v2.1.0) Set/list de fases específicas a
                 forzar re-ejecución incluso si el checkpoint es válido.
                 Útil para debugging fino: re-correr solo L3 sin invalidar
@@ -387,6 +395,11 @@ class Orchestrator:
             >>> orch.run(force_rerun_phases={Phase.L3_SCORING})
             >>> # Equivale a from_phase=L3_SCORING (cascada hacia adelante).
         """
+        # v0.7.1 (Tarea 1.3): resolver skip_reporting con precedencia
+        #   kwarg explícito > profile["skip_reporting"] > False
+        if skip_reporting is None:
+            skip_reporting = bool(self.profile.get("skip_reporting", False))
+
         self._start_time = time.time()
         self._ensure_directories()
 
@@ -770,6 +783,13 @@ class Orchestrator:
                 self.log.debug("   📝 Columna SRC creada desde FUENTE")
             else:
                 self.log.warning("   ⚠️ Columna SRC no encontrada, algunas funciones pueden fallar")
+
+        # Optimización de RAM: columnas de texto pesadas a string[pyarrow]
+        # (centralizado en processing.dtypes). A escala 2M en Colab Free, el
+        # backend Arrow reduce ~30-60% la RAM de estas columnas frente a object.
+        from ..processing.dtypes import optimizar_dtypes_texto
+
+        optimizar_dtypes_texto(df, ["NOMBRE_LIMPIO", "NIT_OK", "CIUDAD", "SRC"])
 
         # Paso 1.4: Clave fonética eliminada.
         # NOMBRE_LIMPIO.str[:10] NO es una clave fonética real.

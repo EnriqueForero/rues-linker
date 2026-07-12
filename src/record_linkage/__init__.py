@@ -18,10 +18,17 @@ Componentes principales:
     - optimization:  Optuna y optimización de hiperparámetros
     - exporters:     Exportación multi-formato
 
-Versión: 3.0.0  (API unificada de alto nivel + Apache-2.0; ver docs/ROADMAP_PRODUCCION.md)
+La versión es única y vive en `pyproject.toml`; aquí se lee dinámicamente
+con `importlib.metadata` para que no exista una segunda fuente de verdad
+que pueda desincronizarse.
 """
 
-__version__ = "3.2.3"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("rues-linker")
+except PackageNotFoundError:  # pragma: no cover - checkout sin instalar
+    __version__ = "0.7.6"
 
 # ── API pública de alto nivel ─────────────────────────────────────────
 # `linkage()` es el punto de entrada recomendado. Las demás se exponen para
@@ -35,6 +42,11 @@ try:
     from .deduplication.unified import deduplicate_unified
 except ImportError:  # pragma: no cover
     deduplicate_unified = None  # type: ignore[assignment]
+
+try:
+    from .deduplication.auto import deduplicate_auto
+except ImportError:  # pragma: no cover
+    deduplicate_auto = None  # type: ignore[assignment]
 
 try:
     from .pipeline.orchestrator import Orchestrator
@@ -51,8 +63,8 @@ try:
 except ImportError:  # pragma: no cover
     evaluar_pares = None  # type: ignore[assignment]
 
-# v3.2.0: matching multi-variable. Auditoría externa (oct 2026) detectó que
-# el módulo existía pero no estaba conectado ni exportado. Esto lo corrige.
+# Matching multi-variable: el módulo `matching` existía pero no estaba
+# conectado ni exportado en la API pública. Este bloque lo expone.
 try:
     from .matching import (
         MatcherPostProcessor,
@@ -80,6 +92,7 @@ __all__ = [
     "VariableSpec",
     "__version__",
     "crear_config_orchestrator",
+    "deduplicate_auto",
     "deduplicate_unified",
     "default_colombia_profile",
     "default_international_profile",

@@ -10,6 +10,7 @@ from .defaults import LSHDefaults
 from .disk_based import DiskBasedLSHEngine
 from .metrics import EngineMetrics
 from .minhash import VectorizedMinHashGenerator
+from .prescreen import NITPrescreener, PrescreenResult, prescreen_and_split
 from .state import EngineState
 from .trusted import TrustedSourceLSHEngine
 
@@ -18,6 +19,9 @@ __all__ = [
     "EngineMetrics",
     "EngineState",
     "LSHDefaults",
+    "NITPrescreener",
+    "PrescreenResult",
     "TrustedSourceLSHEngine",
     "VectorizedMinHashGenerator",
+    "prescreen_and_split",
 ]

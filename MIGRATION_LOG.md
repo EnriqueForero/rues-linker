@@ -1,6 +1,6 @@
 # MIGRATION_LOG — Auditoría del refactor notebook → paquete .py
 
-> **Fecha:** 2026-05-20
+> **Fecha:** 2026-05-20 (inicial) — entradas adicionales por versión.
 > **Notebook fuente:** `1779336054515_2026_02_15_DEDUPLICAR_Y_RECORD_LINKAGE_.ipynb`
 > **Total notebook:** 292 celdas (148 markdown + 144 código), 25.745 LOC efectivas,
 > 83 definiciones de clase, 156 funciones top-level.
@@ -8,6 +8,69 @@
 Este documento registra **cada decisión no trivial** del refactor para
 auditoría posterior. Si el pipeline produce resultados distintos al notebook
 original, este es el primer lugar a revisar.
+
+---
+
+## 2026-05-26 — Re-versionamiento semántico: v3.2.7 → v0.4.0
+
+### Motivación
+
+El paquete había acumulado 19 versiones (v2.0.0 → v3.2.7) en 5 días sin
+convención clara de [SemVer 2.0.0](https://semver.org). Saltos arbitrarios
+(v2.14.0 → v3.0.0 sin pre-release), patches para features, etc. La numeración
+"3.2.X" sugería un nivel de madurez que el paquete no tenía:
+
+- ❌ No publicado en PyPI
+- ❌ Sin CI/CD configurado
+- ❌ Sin cobertura de tests medida
+- ❌ API aún inestable (2 optimizadores Optuna distintos)
+- ❌ 11 claves dead code documentadas
+- ❌ No validado contra las 4 fuentes reales (1.97M registros)
+
+### Decisión
+
+Reset a `0.4.0` siguiendo convención estándar de la comunidad Python
+(`scikit-learn`, `pandas`, `requests` empezaron en 0.x y se quedaron ahí
+años antes de su 1.0).
+
+### Equivalencia retroactiva
+
+Ver `CHANGELOG.md` (entrada 0.4.0) y `docs/VERSIONING.md` para tabla completa
+de mapeo de tags antiguos.
+
+### Cambios mecánicos
+
+Solo se actualizaron strings de versión funcionales:
+- `pyproject.toml` (`version = "0.4.0"`)
+- `src/record_linkage/__init__.py` (`__version__ = "0.4.0"`)
+- `tests/test_matching_integration.py` (`test_version_is_0_4_0`)
+- `notebooks/04_optuna_calibration.ipynb` (assert `>= "0.4.0"`)
+- `README.md` (badge + nota)
+- `CHANGELOG.md` (entrada 0.4.0 con equivalencia retroactiva)
+
+**No se modificó:** comentarios históricos en el código fuente
+(`# v3.2.4 (FIX FASE 1): ...`). Estos son traza fiel del momento en que
+se hicieron los cambios y útiles para arqueología del código.
+
+### Verificación
+
+- 380/380 tests pasan después del reset.
+- Comportamiento idéntico a v3.2.7 (cero cambios funcionales).
+- Tags antiguos `v3.2.X` en GitHub se preservan (no se borran).
+
+### Roadmap hacia 1.0.0
+
+Ver `docs/VERSIONING.md` para el plan detallado:
+
+- `0.5.0`: limpieza de código legacy (~1 semana)
+- `0.6.0`: CI/CD + cobertura (~1 semana)
+- `0.7.0`: validación contra producción real (~1 semana)
+- `0.8.0`: optimización rendimiento (~2 semanas)
+- `0.9.0`: feature freeze + docs completas (~1 semana)
+- **`1.0.0`**: primera publicación en PyPI
+
+---
+
 
 ---
 

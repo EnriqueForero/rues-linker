@@ -309,17 +309,26 @@ DEDUPLICATION_PROFILES = {
         #     (NENOVA, agrupación CORRECTA), separa WORLD FLORA de DAEDONG.
         # Prioriza PRECISIÓN sobre recall: preferimos NO fusionar dudosos.
         #
-        # SIN ground truth no se puede afirmar un F1; estos números son de
-        # composición (cuántos grupos, tamaño máximo), no de calidad medida.
-        # Recalibrar si se obtiene un ground truth etiquetado del dominio.
-        "description": "Conservador para fuentes sin NIT (solo nombre + ciudad)",
+        # v0.7.4 — RECALIBRADO CONTRA GROUND TRUTH. Sobre los 2342 registros
+        # SIN_NIT de ground_truth_grande.csv (604 grupos), barrido de
+        # min_name_similarity con score_threshold acoplado:
+        #   nsim=0.75 -> P=0.944 R=0.313 F1=0.470 (demasiado estricto: pierde typos)
+        #   nsim=0.78 -> P=0.907 R=0.501 F1=0.645 ← ÓPTIMO operativo
+        #   nsim=0.80 -> P=0.944 R=0.313 F1=0.470
+        # El baseline previo (deduplicate_unified estándar) daba F1=0.217 por
+        # sobre-fusión. Este perfil casi TRIPLICA el F1 (0.645) manteniendo
+        # precision >0.90: cuando agrupa, acierta 9 de cada 10. El recall 0.50
+        # refleja un límite de DATOS (typos OCR + romanización coreana
+        # inconsistente), no de calibración: ningún umbral supera F1~0.65 sin
+        # destruir precision. Ver docs/DEUDA_SIN_NIT.md para el análisis.
+        "description": "Conservador para fuentes sin NIT (recalibrado vs GT v0.7.4: P=0.91 F1=0.65)",
         "lsh_permutations": 128,
         "lsh_threshold": 0.50,  # más estricto que 0.30 — menos candidatos ruidosos
         "lsh_ngram": 3,
         "batch_size": 30_000,
-        "score_threshold": 0.80,  # más alto que 0.68 — exige más evidencia para unir
+        "score_threshold": 0.78,  # v0.7.4: acoplado a min_name_similarity óptimo
         "max_nit_distance": 3,
-        "min_name_similarity": 0.75,  # más alto que 0.60 — nombres deben parecerse más
+        "min_name_similarity": 0.78,  # v0.7.4: óptimo F1 medido (era 0.75)
         "remove_top_words": 20,
         # Sin NIT, el peso del NIT (0.20) se reparte: nombre domina, ciudad
         # entra vía extra_features (signed) para penalizar ciudades distintas.
@@ -402,17 +411,45 @@ DEFAULT_CONFIG = {
 # ────────────────────────────────────────────────────────────
 def _class_exists(class_name: str) -> bool:
     """
-    Verifica si una clase existe en el contexto global de forma segura.
+    Verifica si una clase existe y es importable de forma segura.
 
-    Más robusto que verificar directamente en globals() ya que
-    maneja casos edge como nombres con sintaxis inválida.
+    v3.2.7 (FASE 4): el comportamiento previo (`eval(class_name)` sobre el
+    contexto global de _internal.py) retornaba False para clases que SÍ
+    existen pero no estaban importadas aquí (caso: ReportGenerator,
+    DataVisualizer, ExecutiveDashboard, EnhancedReportingSuite). Esto
+    causaba que Orchestrator emitiera warnings "no disponible, omitiendo"
+    aun cuando las dependencias estaban instaladas.
+
+    Nueva implementación: intenta importar la clase desde su módulo
+    conocido en `record_linkage.reporting`. Si el import falla (caso
+    real de dependencia ausente), retorna False sin warnings ruidosos.
 
     Args:
-        class_name: Nombre de la clase a verificar
+        class_name: Nombre de la clase a verificar.
 
     Returns:
-        True si la clase existe y es accesible, False en caso contrario
+        True si la clase existe y es importable, False en caso contrario.
     """
+    # Mapeo de clases conocidas a sus módulos (basado en auditoría Fase 4)
+    _CLASS_MODULE_MAP = {
+        "ReportGenerator": "record_linkage.reporting.reports",
+        "DataVisualizer": "record_linkage.reporting.visualizer",
+        "ExecutiveDashboard": "record_linkage.reporting.dashboard",
+        "EnhancedReportingSuite": "record_linkage.reporting.suite",
+    }
+    if class_name in _CLASS_MODULE_MAP:
+        try:
+            import importlib
+
+            module = importlib.import_module(_CLASS_MODULE_MAP[class_name])
+            cls = getattr(module, class_name, None)
+            return cls is not None
+        except (ImportError, ModuleNotFoundError):
+            # Dependencia opcional ausente — silencioso, correcto
+            return False
+        except Exception:
+            return False
+    # Fallback al comportamiento original (clases no mapeadas)
     try:
         cls = eval(class_name)
         return cls is not None

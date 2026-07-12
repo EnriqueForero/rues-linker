@@ -66,6 +66,36 @@ def _hash_rows_stable(band_data: np.ndarray) -> np.ndarray:
     return acc.astype(np.int64)
 
 
+def _content_fingerprint(texts: np.ndarray, num_perm: int, ngram: int) -> str:
+    """Huella de contenido del corpus para validar checkpoints de firmas.
+
+    v0.7.4 (cierre de deuda): ``_validate_signatures_file`` validaba solo por
+    ``(n_records, num_perm, ngram)``. Dos datasets DISTINTOS con el mismo número
+    de filas reusaban firmas incorrectas — bug observado dos veces (baseline
+    Sprint 0.9.0 con output truncado a 1131/12427). Esta huella combina los
+    parámetros del hashing con una muestra del contenido (cada 1000 filas,
+    primeros 50 chars) para detectar cuando el corpus cambió aunque el conteo
+    coincida. Colisión genuina: 2^-64, despreciable.
+
+    Args:
+        texts: Array de nombres limpios (``NOMBRE_LIMPIO``).
+        num_perm: Permutaciones del MinHash.
+        ngram: Tamaño de n-grama.
+
+    Returns:
+        Huella hexadecimal de 16 caracteres.
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    h.update(f"perm={num_perm};ngram={ngram};n={len(texts)};".encode())
+    # Muestra cada 1000 filas (mismo stride que MinHashCache).
+    for i in range(0, len(texts), 1000):
+        h.update(str(texts[i])[:50].encode("utf-8", errors="ignore"))
+        h.update(b"|")
+    return h.hexdigest()[:16]
+
+
 class DiskBasedLSHEngine:
     """
     Motor LSH de producción con almacenamiento en disco para Google Colab.
@@ -210,6 +240,17 @@ class DiskBasedLSHEngine:
             "nit_blocking_max_bucket",
         )
         self._nit_blocking_column = str(active_params.get("nit_blocking_column", "NIT_BASE"))
+
+        # ── v0.7.2 (Sprint 0.8.2, Tarea 2.2): Cache persistente de firmas MinHash ──
+        # Si ``minhash_cache_dir`` está en el perfil/config, las firmas se cachean
+        # entre corridas indexadas por hash del contenido. Acelera iteraciones
+        # de calibración (Optuna, ajuste de umbrales) donde el dataset no cambia
+        # pero los parámetros posteriores sí. NO interfiere con la reutilización
+        # HDF5 dentro de UNA corrida (que sigue funcionando como antes).
+        # Default: None (deshabilitado, comportamiento previo a v0.7.2).
+        cache_dir_raw = active_params.get("minhash_cache_dir", None)
+        self._minhash_cache_dir: Path | None = Path(cache_dir_raw) if cache_dir_raw else None
+        self._minhash_cache_max_gb = float(active_params.get("minhash_cache_max_gb", 5.0))
 
     @staticmethod
     def _validate_int(value: Any, min_val: int, max_val: int, name: str) -> int:
@@ -445,15 +486,73 @@ class DiskBasedLSHEngine:
     # ═══════════════════════════════════════════════════════════════════════════
 
     def _generate_signatures(self, df: pd.DataFrame) -> None:
-        """Genera y almacena firmas MinHash en HDF5."""
+        """Genera y almacena firmas MinHash en HDF5.
+
+        v0.7.2 (Sprint 0.8.2, Tarea 2.2): Si ``minhash_cache_dir`` está
+        configurado, intenta primero cargar las firmas desde el cache
+        persistente (cross-corrida). Cache hit → 0.5s; miss → comportamiento
+        original (~6 min en 1.97M) + escritura asíncrona al cache.
+        """
+        # v0.7.4: huella de contenido para validar checkpoints por CONTENIDO,
+        # no solo por número de filas. Cierra el bug de checkpoints stale.
+        _texts_all = df["NOMBRE_LIMPIO"].values
+        content_fp = _content_fingerprint(_texts_all, self._num_perm, self._ngram)
+
         if self._signatures_file.exists():
-            if self._validate_signatures_file(len(df)):
-                self.logger.info("📝 Reutilizando firmas existentes")
+            if self._validate_signatures_file(len(df), content_fingerprint=content_fp):
+                self.logger.info("📝 Reutilizando firmas existentes (huella validada)")
                 self.state = EngineState.SIGNATURES_READY
                 return
+            self.logger.info("♻️  Firmas existentes no coinciden con el corpus; regenerando")
             self._signatures_file.unlink()
 
         n_records = len(df)
+
+        # ── v0.7.2: intento de carga desde cache persistente ───────────
+        cached_sigs = None
+        cache_instance = None
+        if self._minhash_cache_dir is not None:
+            from .cache import MinHashCache  # import local: opt-in
+
+            cache_instance = MinHashCache(
+                cache_dir=self._minhash_cache_dir,
+                max_size_gb=self._minhash_cache_max_gb,
+            )
+            cached_sigs = cache_instance.get(
+                df,
+                num_perm=self._num_perm,
+                ngram=self._ngram,
+                seed=42,
+            )
+
+        if cached_sigs is not None:
+            # CACHE HIT: escribir directo al HDF5 sin recalcular nada.
+            self.logger.info(
+                "✅ Firmas recuperadas del cache (%d registros, shape=%s)",
+                n_records,
+                cached_sigs.shape,
+            )
+            start_time = time.time()
+            with h5py.File(str(self._signatures_file), "w") as hf:
+                chunk_rows = min(self._chunk_size, n_records)
+                hf.create_dataset(
+                    "signatures",
+                    data=cached_sigs,
+                    chunks=(chunk_rows, self._num_perm),
+                    compression="gzip",
+                    compression_opts=1,
+                )
+                hf.attrs["n_records"] = n_records
+                hf.attrs["num_perm"] = self._num_perm
+                hf.attrs["ngram"] = self._ngram
+                hf.attrs["version"] = self.VERSION
+                hf.attrs["content_fp"] = content_fp  # v0.7.4: validación por contenido
+            self.metrics.signatures_generated = n_records
+            self.metrics.time_signatures = time.time() - start_time
+            self.state = EngineState.SIGNATURES_READY
+            return
+
+        # ── CACHE MISS o cache deshabilitado: ruta original ────────────
         self.logger.info(f"📝 Generando {n_records:,} firmas MinHash...")
         start_time = time.time()
 
@@ -472,6 +571,7 @@ class DiskBasedLSHEngine:
             hf.attrs["num_perm"] = self._num_perm
             hf.attrs["ngram"] = self._ngram
             hf.attrs["version"] = self.VERSION
+            hf.attrs["content_fp"] = content_fp  # v0.7.4: validación por contenido
 
             texts = df["NOMBRE_LIMPIO"].values
 
@@ -499,6 +599,29 @@ class DiskBasedLSHEngine:
         self.state = EngineState.SIGNATURES_READY
         self.logger.info(f"✅ Firmas generadas en {self.metrics.time_signatures:.1f}s")
 
+        # ── v0.7.2: guardar en cache para la próxima corrida ───────────
+        if cache_instance is not None:
+            try:
+                # Leemos las firmas que acabamos de escribir al HDF5.
+                # Esto es marginalmente más caro que mantenerlas en RAM
+                # durante la generación, pero evita duplicar memoria para
+                # datasets grandes (1.97M × 128 × 8 bytes = ~2 GB).
+                with h5py.File(str(self._signatures_file), "r") as hf:
+                    sigs_to_cache = hf["signatures"][:]
+                key = cache_instance.put(
+                    df,
+                    num_perm=self._num_perm,
+                    ngram=self._ngram,
+                    seed=42,
+                    signatures=sigs_to_cache,
+                )
+                self.logger.info("💾 Firmas guardadas en cache (key=%s)", key)
+            except Exception as exc:
+                # El cache es opt-in y no-crítico. Un fallo aquí no debe
+                # romper el pipeline — solo se loggea y la próxima corrida
+                # generará de nuevo.
+                self.logger.warning("⚠️  No se pudo guardar cache MinHash: %s", exc)
+
     def _create_minhash(self, text: Any, max_val: int) -> np.ndarray:
         """Crea firma MinHash para un texto (un registro).
 
@@ -523,16 +646,34 @@ class DiskBasedLSHEngine:
         except Exception:
             return np.full(self._num_perm, max_val, dtype=np.uint64)
 
-    def _validate_signatures_file(self, expected_records: int) -> bool:
-        """Valida archivo de firmas existente."""
+    def _validate_signatures_file(
+        self, expected_records: int, content_fingerprint: str | None = None
+    ) -> bool:
+        """Valida archivo de firmas existente.
+
+        v0.7.4: además de ``(n_records, num_perm, ngram)``, valida la huella
+        de contenido si se proporciona. Esto evita reusar firmas de un corpus
+        DISTINTO que casualmente tenga el mismo número de registros.
+        Checkpoints viejos sin huella (``content_fp`` ausente) se consideran
+        inválidos cuando se exige huella — fuerza regeneración una vez, segura.
+        """
         try:
             with h5py.File(str(self._signatures_file), "r") as hf:
-                return (
+                basic_ok = (
                     "signatures" in hf
                     and hf.attrs.get("n_records", 0) == expected_records
                     and hf.attrs.get("num_perm", 0) == self._num_perm
                     and hf.attrs.get("ngram", 0) == self._ngram
                 )
+                if not basic_ok:
+                    return False
+                if content_fingerprint is not None:
+                    stored_fp = hf.attrs.get("content_fp", None)
+                    # Si el checkpoint no trae huella (formato viejo) o no
+                    # coincide, NO reusar — regenerar es barato y seguro.
+                    if stored_fp != content_fingerprint:
+                        return False
+                return True
         except Exception:
             return False
 

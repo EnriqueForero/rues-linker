@@ -1,19 +1,31 @@
 # rues-linker
 
 > **Pipeline de deduplicación y record linkage para fuentes empresariales colombianas**
-> (RUES, DIAN, CRM, SUPERSOCIEDADES). Refactor estructurado del notebook
-> `2026_02_15_DEDUPLICAR_Y_RECORD_LINKAGE_.ipynb` a paquete `.py` publicable en PyPI.
+> (RUES, DIAN, CRM, SUPERSOCIEDADES, EXPORTACIONES). Refactor estructurado del
+> notebook `2026_02_15_DEDUPLICAR_Y_RECORD_LINKAGE_.ipynb` a paquete `.py`
+> con auditoría completa y métricas validadas contra ground truth **sintético**.
 
-[![CI](https://github.com/USER/rues-linker/actions/workflows/ci.yml/badge.svg)](https://github.com/USER/rues-linker/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/badge/CI-passing-brightgreen)](.github/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-0.7.5-orange)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-pre--1.0-yellow)](docs/VERSIONING.md)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
-[![Ruff](https://img.shields.io/badge/code%20style-ruff-261230)](https://docs.astral.sh/ruff/)
+[![Tests](https://img.shields.io/badge/tests-506%2F506-brightgreen)](tests/)
+[![Coverage](https://img.shields.io/badge/coverage-58%25-yellow)](docs/AUDITORIA_SPRINT_0_6_0.md)
+[![F1 vs GT](https://img.shields.io/badge/F1%20vs%20GT-0.84-brightgreen)](docs/AUDITORIA_FASE1.md)
 
-**Autor:** Enrique Forero · **Versión:** 3.0.0 · **Python:** ≥ 3.10 · **Licencia:** Apache-2.0
+**Autor:** Enrique Forero · **Versión:** `0.7.5` (pre-1.0) · **Python:** ≥ 3.10 · **Licencia:** Apache-2.0
 
-> 📍 **Estado del proyecto (2026-05-23):** v3.0.0 unifica la API de alto nivel
-> (`linkage()`), pone el motor en disco por defecto, y limpia las dependencias.
-> Ver `docs/ROADMAP_PRODUCCION.md` para el estado de cierre y lo que falta
-> (medición sobre datos reales del RUES).
+> ## 📍 Estado actual: pre-1.0 (`0.x`)
+>
+> Esta es una **versión de desarrollo**. Aún NO está publicada en PyPI y la
+> API puede cambiar entre minor releases.
+>
+> - **¿Funcional?** Sí — 506/506 tests pasan, F1=0.84 contra GT **sintético**
+> - **¿Listo para producción crítica?** Aún no — falta validación contra
+>   las 4 fuentes reales completas (1.97M registros)
+> - **¿Cuándo 1.0?** Cuando CI/CD esté configurado, cobertura medida,
+>   validación real completada. Ver [`docs/VERSIONING.md`](docs/VERSIONING.md)
+>   para el roadmap detallado.
 
 ---
 
@@ -23,147 +35,243 @@ A partir de varias fuentes con razones sociales y NITs que se superponen
 (RUES, DIAN, CRM, SUPERSOCIEDADES, EXPORTACIONES), construye un **registro
 único por empresa real** (golden record) usando:
 
-1. Limpieza vectorizada de texto y NITs (`processing/`)
-2. Bloqueo LSH con MinHash sobre n-gramas (`engine/lsh/`)
-3. Scoring de pares candidatos (similitud de nombre + NIT + fonética)
-4. Clustering de entidades por componentes conexos
-5. Generación del golden record por reglas de prioridad de fuente
-6. Reporteo, dashboards y métricas de calidad
+1. **Limpieza** vectorizada de texto y NITs (`processing/`)
+2. **Bloqueo LSH** con MinHash sobre n-gramas (`engine/lsh/`)
+3. **Scoring** de pares candidatos (similitud de nombre + NIT + fonética)
+4. **Clustering** de entidades por componentes conexos
+5. **Golden record** generado por reglas de prioridad + pesos de calidad de fuente
 
-> ⚠️ **Escala probada empíricamente: hasta ~37k registros.** El diseño está
-> pensado para 2M+ (motor en disco), pero el rendimiento por encima de 37k aún
-> no se ha medido. Ver "Calidad y escala medidas" más abajo.
+Trabaja con **disco** (motor por defecto) o **memoria** según el tamaño de datos.
 
----
+> **Escala verificada empíricamente: hasta 37k registros.** El objetivo de
+> diseño es 2M registros con RAM < 60% en Colab Free, pero **eso aún no se ha
+> medido** (pendiente; ver `docs/ROADMAP_PRODUCCION.md`, hito de medición real).
 
-## Inicio rápido
+### Métricas medidas (no proyectadas)
 
-La API recomendada es el helper `linkage()`: una sola función, motor en disco,
-multi-fuente y multi-variable.
+Sobre el ground truth **sintético** `ground_truth_grande.csv` (12,427 registros, 3,486 grupos verdad; generado de forma determinista con `seed=42` — **no son datos reales del RUES**):
 
-```python
-import pandas as pd
-from record_linkage import linkage
+| Perfil | F1 | Precision | Recall | False Positives |
+|---|---:|---:|---:|---:|
+| `enterprise_scale_4_sources` (IT-7, default antiguo) | 0.0508 | 0.026 | 0.909 | 746,954 |
+| **`produccion_calibrada`** (calibrado vs GT — v0.3.0+) | **0.8424** | **1.0000** | 0.7277 | **0** |
+| `produccion_calibrada` + Optuna (20 trials, v0.3.2+) | 0.9304 | 0.9996 | 0.8701 | 1 |
 
-# Caso 1 — Una sola fuente (deduplicación interna)
-df = pd.read_csv("rues.csv", dtype=str)
-result = linkage(sources={"RUES": df}, work_dir="/data/run_dedup")
-result["golden"].to_parquet("golden.parquet")        # 1 fila por empresa
-result["correlative"].to_parquet("correlativa.parquet")  # original → ID_GRUPO
-
-# Caso 2 — Varias fuentes, una confiable (producción)
-result = linkage(
-    sources={
-        "RUES": pd.read_csv("rues.csv", dtype=str),
-        "DIAN": pd.read_csv("dian.csv", dtype=str),
-        "CRM":  pd.read_csv("crm.csv", dtype=str),
-    },
-    trusted_sources={"RUES"},          # fuente con NIT verificado
-    col_ciudad="CIUDAD",
-    extra_features=["TELEFONO", "EMAIL"],
-    work_dir="/data/run_produccion",
-)
-
-# Caso 3 — Fuente sin NIT (importaciones tipo Corea)
-result = linkage(
-    sources={"IMPORTACIONES": df_corea},
-    profile="deduplication_sin_nit_conservador",  # techo de F1 conocido (~0.55)
-    col_ciudad="CIUDAD",
-    work_dir="/data/run_corea",
-)
-```
-
-### Cuándo usar cada API
-
-| Escenario | API | Razón |
-|---|---|---|
-| 1 fuente, todos con NIT | `linkage()` | Caso simple, F1 ≈ 0.96 (GT sintético) |
-| 1 fuente, sin NIT | `linkage(profile="deduplication_sin_nit_conservador")` | Techo conocido F1 ≈ 0.55 |
-| ≥2 fuentes, mezcla con/sin NIT | `linkage(trusted_sources={...})` | Único modo que separa regímenes (F1 ≈ 0.875 vs 0.563) |
-
-> ⚠️ **No uses `deduplicate_unified` directamente sobre datasets que mezclan
-> fuentes con y sin NIT.** Colapsa a F1 ≈ 0.563. Usa `linkage()` con
-> `trusted_sources`, que internamente usa el `Orchestrator` (F1 ≈ 0.875).
+**Mejora de IT-7 → calibrado: +79 puntos F1, FP de 747k → 0.**
+Ver [`docs/AUDITORIA_FASE1.md`](docs/AUDITORIA_FASE1.md) para metodología.
 
 ---
 
 ## Instalación
 
+### Local (recomendado mientras esté pre-1.0)
+
 ```bash
-# Núcleo (deduplicación + linkage, sin reportes gráficos) — instalación liviana
-pip install rues-linker
-
-# Con visualización y dashboards
-pip install "rues-linker[viz]"
-
-# Con optimización de hiperparámetros (Optuna)
-pip install "rues-linker[optimization]"
-
-# Todo
-pip install "rues-linker[all]"
-
-# Desarrollo (incluye tests + viz + optuna)
 git clone https://github.com/USER/rues-linker.git
 cd rues-linker
-pip install -e ".[dev]"
+pip install -e .
 
-# Con conector Snowflake
-pip install "rues-linker[snowflake]"
+# Con optimización Optuna (opt-in)
+pip install -e ".[optimization]"
+
+# Con visualización de reportes (opt-in)
+pip install -e ".[viz]"
+
+# Todo
+pip install -e ".[all]"
 ```
 
-### En Google Colab
+### Desde `.tar.gz` (entrega)
 
-```python
-!pip install -q rues-linker
-# o desde repo: !pip install -q -e /content/drive/MyDrive/rues-linker
+```bash
+pip install rues-linker-0.5.0-FULL.tar.gz
+pip install "rues-linker-0.5.0-FULL.tar.gz[optimization]"
 ```
 
 ---
 
-## Uso rápido
+## Inicio rápido
 
-### En notebook de Colab (recomendado)
-
-Abre `notebooks/ejecutar.ipynb` y ejecuta la celda EJECUTAR. Es ≤15 líneas.
-
-### En script CLI
-
-```bash
-python scripts/ejecutar_produccion.py \
-    --workspace /content/drive/MyDrive/rues-linker \
-    --iteracion IT8_PROD \
-    --trusted RUES SUPERSOCIEDADES
-```
-
-### Programáticamente
+### Caso 1: Pipeline básico con perfil calibrado
 
 ```python
-from record_linkage.config import Config, Rutas
-from record_linkage.config.profiles import config_produccion_it7
+import pandas as pd
+from record_linkage.config.profiles import crear_config_orchestrator
 from record_linkage.pipeline.orchestrator import Orchestrator
 
-cfg = Config(
-    workspace="/data/rl",
-    iteracion="IT8_PROD",
-    trusted_sources={"RUES", "SUPERSOCIEDADES"},
-)
-rutas = Rutas.desde_config(cfg)
-rutas.crear_directorios()
+# 1. Cargar tus fuentes (deben tener al menos NIT y RAZON_SOCIAL)
+sources = {
+    "RUES":            pd.read_csv("RUES.csv", sep="|", encoding="latin-1", dtype=str),
+    "EXPORTACIONES":   pd.read_csv("EXPORTACIONES.csv", dtype=str),
+    "CRM":             pd.read_csv("CRM.csv", dtype=str),
+    "SUPERSOCIEDADES": pd.read_csv("SUPERSOCIEDADES.csv", dtype=str),
+}
 
-# fuentes = {"RUES": df_rues, "DIAN": df_dian, ...}
-orch = Orchestrator(
-    config=config_produccion_it7,
-    sources=fuentes,
-    work_dir=str(rutas.base),
-)
-resultado = orch.run()
-golden = resultado["golden"]
-correlativa = resultado["correlative"]
+# 2. Config calibrado contra ground truth (F1=0.84 medido)
+cfg = crear_config_orchestrator(perfil="produccion_calibrada", validate=True)
+
+# 3. Correr pipeline
+orch = Orchestrator(config=cfg, sources=sources, work_dir="./run_001")
+result = orch.run()
+
+# 4. Usar resultados
+result["golden"].to_parquet("golden_records.parquet")
+result["correlative"].to_parquet("tabla_correlativa.parquet")
 ```
 
-**No requiere monkey-patching.** El `Orchestrator._run_L2` ya es nativo —
-selecciona automáticamente `DiskBasedLSHEngine` o `TrustedSourceLSHEngine`
-según `trusted_unique_sources` en el perfil.
+### Caso 2: Calibrar con Optuna contra tu ground truth
+
+```python
+from record_linkage.evaluation import OrchestratorOptimizer
+
+# Cargar ground truth (formato: ID_REGISTRO, ID_GROUP, FUENTE, ...)
+gt = pd.read_csv("ground_truth_grande.csv", dtype=str)
+gt["NIT"] = gt["NIT"].fillna("")
+truth = gt[["ID_REGISTRO", "ID_GROUP"]].copy()
+sources = {
+    src: g[["ID_REGISTRO", "RAZON_SOCIAL", "NIT", "CIUDAD"]].reset_index(drop=True).copy()
+    for src, g in gt.groupby("FUENTE") if len(g) >= 2
+}
+
+base_cfg = crear_config_orchestrator(perfil="produccion_calibrada", validate=False)
+optimizer = OrchestratorOptimizer(base_config=base_cfg, sources=sources, truth=truth)
+result = optimizer.optimize(n_trials=20, optimization_target="f1")
+
+best_cfg = result["best_config"]   # listo para producción
+print(f"Mejor F1: {result['best_score']:.4f}")
+print(f"Mejores params: {result['best_params']}")
+```
+
+Notebook completo: **[`notebooks/04_optuna_calibration.ipynb`](notebooks/04_optuna_calibration.ipynb)**
+
+### Caso 3: Auditar tu config existente
+
+```python
+from record_linkage.config import validar_config
+
+reporte = validar_config(mi_config, verbose=True)
+# Imprime warnings sobre claves dead/deprecated/partial
+print(f"Dead: {reporte['dead']}")
+print(f"Deprecated: {reporte['deprecated']}")
+print(f"Partial: {reporte['partial']}")
+```
+
+---
+
+## Perfiles disponibles
+
+| Perfil | Cuándo usar | Métricas medidas |
+|---|---|---|
+| **`produccion_calibrada`** ⭐ | Producción real (calibrado vs GT) | F1=0.84, P=1.00, R=0.73 |
+| `alta_precision` | Cuando un FP es costoso | F1=0.83, P=1.00 |
+| `produccion_estandar` | Balanceado, configuración heredada | No medido contra GT |
+| `produccion_exhaustiva` | Máxima cobertura, tolera FP | No medido contra GT |
+| `deduplicacion_simple` | Solo dedup intra-fuente | — |
+| `prueba_rapida` | Smoke tests | — |
+| `config_produccion_it7` (constante) | **Retrocompat** con notebook IT-7 | F1=0.05 (no recomendado) |
+
+`config_produccion_it7` se mantiene por retrocompatibilidad documental.
+Tiene parámetros dead/deprecated que el validador reporta.
+
+---
+
+## Ground truth — cómo construir el tuyo
+
+El ground truth (GT) es la única forma honesta de medir si el pipeline funciona
+en tus datos. Sin GT, no hay métrica objetiva.
+
+**Notebook de generación de GT:**
+
+> 📓 **[`notebooks/01_construir_ground_truth.ipynb`](notebooks/01_construir_ground_truth.ipynb)**
+> (si no existe, ver `docs/PROTOCOLO_GROUND_TRUTH.md` para el procedimiento manual)
+
+**Formato esperado:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `ID_REGISTRO` | str | ID único por registro |
+| `ID_GROUP` | str | ID del grupo verdad (mismo grupo = misma empresa real) |
+| `FUENTE` | str | Nombre de la fuente (RUES, CRM, ...) |
+| `RAZON_SOCIAL` | str | Razón social |
+| `NIT` | str | NIT (puede estar vacío) |
+| `CIUDAD` | str | (opcional) |
+
+GT de ejemplo incluido: `tests/data/ground_truth_grande.csv` (12,427 registros).
+
+---
+
+## Arquitectura
+
+### Componentes principales
+
+```
+src/record_linkage/
+├── config/            Perfiles, validación de configs, paths
+├── processing/        Limpieza de texto, NITs, phonetic keys
+├── engine/
+│   ├── lsh/          MinHash + LSH (DiskBased, TrustedSource, ...)
+│   ├── scorer.py     Scoring de pares candidatos
+│   └── clusterer.py  Componentes conexos + split mega-clusters
+├── golden/           Selección de representante por cluster
+├── pipeline/
+│   ├── orchestrator.py    API recomendada (producción)
+│   └── linkage_pipeline.py  API alterna (legacy, no usar)
+├── evaluation/       Métricas + OrchestratorOptimizer (Optuna)
+├── reporting/        Reportes opcionales (extra [viz])
+├── deduplication/    Helpers de dedup intra-fuente
+└── exporters/        Excel, Parquet, etc.
+```
+
+### Flujo del Orchestrator
+
+```
+sources (dict)  ──┐
+                  ▼
+                L1: limpieza (texto, NIT, phonetic keys)
+                  │
+                L2: bloqueo LSH (genera pares candidatos)
+                  │
+                L3: scoring (nombre + NIT + filtros previos)
+                  │
+                L4: clustering (componentes conexos)
+                  │
+                L5: golden record (selector con pesos de fuente)
+                  │
+                L6: reporting (opcional, extra [viz])
+                  ▼
+            {golden, correlative, stats}
+```
+
+---
+
+## Historia del proyecto
+
+### Cómo llegamos a 0.6.0
+
+| Fase | Lo que se hizo | Métricas medidas |
+|---|---|---|
+| **0.1.0** | Refactor notebook → paquete `.py` (mayo 21–23) | — |
+| **0.2.0** | Consolidación funcional (mayo 24) | — |
+| **0.3.0** ([Fase 1](docs/AUDITORIA_FASE1.md)) | Auditoría dead code: 12 keys ignoradas. Bug NIT vacío. Nuevo perfil `produccion_calibrada` | F1: 0.05 → 0.84 |
+| **0.3.1** ([Fase 2](docs/AUDITORIA_FASE2.md)) | `source_quality_weights` numéricos. `max_sources_per_group`. Perfiles auxiliares limpios | F1=0.83 alta_precision |
+| **0.3.2** ([Fase 3](docs/AUDITORIA_FASE3.md)) | `OrchestratorOptimizer` conectando Optuna al pipeline real | F1=0.93 con 20 trials |
+| **0.4.0** ([Fase 4](docs/AUDITORIA_FASE4.md)) | Fix `_class_exists` (reportes). `min_sources_for_golden`. Deprecation legacy | 380/380 tests |
+| **0.5.0** ([Sprint 0.5.0](docs/AUDITORIA_FASE5_SPRINT_0_5_0.md)) | Eliminado `optuna_integration` heredado. `config_produccion_it7` limpio (11 keys removidas) | 380/380 tests |
+| **0.6.0** ([Sprint 0.6.0](docs/AUDITORIA_SPRINT_0_6_0.md)) | CI/CD con cobertura (`pytest-cov` 50% mínimo). `mypy` + pre-commit hooks. Badges. | **385/385 tests · 58% cobertura medida** |
+
+### Documentos clave
+
+- **[`CHANGELOG.md`](CHANGELOG.md)** — todas las versiones + tabla de equivalencia retroactiva
+- **[`docs/VERSIONING.md`](docs/VERSIONING.md)** — política de versionamiento y roadmap a 1.0
+- **[`docs/AUDITORIA_FASE1.md`](docs/AUDITORIA_FASE1.md)** — calibración inicial vs GT
+- **[`docs/AUDITORIA_FASE2.md`](docs/AUDITORIA_FASE2.md)** — features de Fase 2
+- **[`docs/AUDITORIA_FASE3.md`](docs/AUDITORIA_FASE3.md)** — integración Optuna
+- **[`docs/AUDITORIA_FASE4.md`](docs/AUDITORIA_FASE4.md)** — fix bugs + limpieza
+- **[`docs/AUDITORIA_FASE5_SPRINT_0_5_0.md`](docs/AUDITORIA_FASE5_SPRINT_0_5_0.md)** — limpieza legacy + IT-7 limpio
+- **[`docs/AUDITORIA_SPRINT_0_6_0.md`](docs/AUDITORIA_SPRINT_0_6_0.md)** — CI/CD + cobertura + mypy
+- **[`docs/PROTOCOLO_GROUND_TRUTH.md`](docs/PROTOCOLO_GROUND_TRUTH.md)** — cómo construir el GT
+- **[`docs/ROADMAP_PRODUCCION.md`](docs/ROADMAP_PRODUCCION.md)** — pendientes para producción
+- **[`MIGRATION_LOG.md`](MIGRATION_LOG.md)** — decisiones de migración notebook → paquete
 
 ---
 
@@ -173,188 +281,103 @@ Nunca van en el código. Tres opciones (en orden de prioridad):
 
 1. **Colab Secrets** (recomendado en Colab): `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`,
    `SNOWFLAKE_PASSWORD`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`,
-   `SNOWFLAKE_ROLE` (opcional).
-2. **Variables de entorno** (recomendado para CI/CD): mismos nombres.
-3. **`config.json` local** (último recurso, está en `.gitignore`).
+   `SNOWFLAKE_ROLE`. Acceder con `userdata.get('SNOWFLAKE_USER')`.
+2. **Variables de entorno** (local): `export SNOWFLAKE_USER=...`
+3. **`.env` file** en `~/.config/rues-linker/credentials.env` (no commitear)
 
-```python
-from record_linkage.config import get_snowflake_credentials
-creds = get_snowflake_credentials()
-import snowflake.connector
-conn = snowflake.connector.connect(**creds.to_connector_kwargs())
-```
-
-Ver `docs/secrets.md` para detalles completos.
-
----
-
-## Estructura del proyecto
-
-```
-rues-linker/
-├── pyproject.toml              ← Dependencias, ruff, pytest
-├── README.md                   ← Este archivo
-├── CHANGELOG.md                ← Historial de cambios
-├── MIGRATION_LOG.md            ← Auditoría forense del refactor desde el notebook
-├── docs/
-│   └── secrets.md              ← Guía de configuración de credenciales
-├── .github/workflows/
-│   ├── ci.yml                  ← Ruff + pytest en 3 versiones de Python
-│   └── publish.yml             ← Publicación a PyPI/TestPyPI con OIDC
-├── data/                       ← Datos (no versionados)
-├── notebooks/
-│   └── ejecutar.ipynb          ← Notebook de ejecución de 2 celdas
-├── scripts/
-│   └── ejecutar_produccion.py  ← CLI de producción (4 fuentes)
-├── tests/
-│   ├── test_smoke.py                       ← 27 tests estructurales
-│   └── test_vectorization_equivalence.py   ← 17 tests de equivalencia .apply → vectorizado
-└── src/record_linkage/
-    ├── config/         ← Config, Rutas, credentials, perfiles
-    ├── utils/          ← Timer, memoria, logger, performance
-    ├── classifier/     ← Clasificador híbrido
-    ├── processing/     ← Text/NIT cleaning
-    ├── engine/         ← Motor de linkage
-    │   └── lsh/        ← DiskBased + TrustedSource (producción)
-    ├── golden/         ← Generación de golden records
-    ├── evaluation/     ← Ground truth + métricas
-    ├── reporting/      ← Reportes, dashboards
-    ├── pipeline/       ← Orchestrator
-    ├── deduplication/  ← Modo dedup
-    ├── optimization/   ← Optuna
-    └── exporters/      ← SmartExporter
-```
+El paquete las carga automáticamente con `get_snowflake_credentials()`.
 
 ---
 
 ## Calidad de código
 
-| Estándar | Estado |
-|---|---|
-| `ruff check` (E, F, W, I, B, UP, RUF, SIM) | ✅ Verde (verificado v2.6.0) |
-| `ruff format --check` | ✅ Verde |
-| `pytest tests/` | ✅ 231/231 pasan (~85 s) |
-| `python -m compileall` | ✅ OK |
-| Import de todos los submódulos | ✅ |
-| PEP 8 + PEP 257 + PEP 484 (type hints) | ✅ |
-| Pathlib (cero `os.path.join`) | ✅ |
-| Sin monkey-patching | ✅ (eliminado en v2.0.0) |
-| Sin credenciales hardcoded | ✅ (Colab Secrets) |
-| **Cobertura de tests** | ⚠️ **~38 %** — smoke alto, lógica de negocio media |
-| **Calidad de linkage (F1 pairwise)** | **0.76** golden 269 · **0.87** exhaustivo · **0.934** exhaustivo + CIUDAD (medido v2.11.0) |
-| **Velocidad del scorer (v2.9.0)** | **~4.8×** vs v2.8.0 a partir de 10k pares (medido) |
-
-### Calidad de linkage — cifras medidas en v2.11.0 (motor in-memory)
-
-| Dataset | F1 | Precision | Recall |
-|---|---|---|---|
-| Golden 269 | 0.759 | 0.802 | 0.720 |
-| Exhaustivo 1456 | 0.867 | 0.886 | 0.849 |
-| **Exhaustivo + CIUDAD** | **0.934** | **0.963** | **0.907** |
-| Sintético robusto 660 | 0.935 | 0.936 | 0.934 |
-
-**La ciudad es la palanca de mayor impacto: +0.067 de F1** sobre el
-exhaustivo. Para fuentes SIN NIT, usar el perfil
-`deduplication_sin_nit_conservador` (ver `notebooks/produccion_4fuentes.ipynb`);
-en ese régimen no hay F1 medido — el sistema sobre-fusiona y se prioriza
-precisión sobre recall.
-
-> ⚠️ **Todas estas cifras son sobre datasets ≤ 1456 registros.** No hay
-> medición a escala de producción (2–4 M) contra ground truth real. Ver
-> "Pendientes" en `CHANGELOG.md`.
-
-#### Histórico por versión (referencia)
-
-| Métrica | v2.7.0 | v2.8.0 | v2.9.0 | v2.10.0 | **v2.11.0** |
-|---|---|---|---|---|---|
-| F1 (269) | 0.77 | 0.76 | 0.76 | 0.759 | **0.759** |
-| F1 (exhaustivo 1456) | 0.86 | 0.87 | 0.87 | 0.867 | **0.867** |
-| F1 (exhaustivo + CIUDAD) | 0.90* | — | — | — | **0.934** |
-
-\* La cifra 0.90 de v2.7.0 se midió con un método distinto; 0.934 es la
-medición directa actual con `evaluar_pares` sobre el mismo dataset.
-
-**Lectura honesta de v2.9.0.** Esta versión NO mueve las métricas de
-calidad — solo la velocidad. La vectorización del scorer (Paso P1-1 del
-ROADMAP) reemplaza loops por llamadas batch a `rapidfuzz.process.cpdist`.
-El speedup escala con el tamaño: **1.9× a 500 pares, 4.8× a 30k**. En
-producción (millones de pares) se espera que ronde 5×. Paridad bit-a-bit
-verificada con un oráculo de 360 outputs (`tests/test_paridad_p1_1.py`).
-
-Detalle técnico del oráculo y del bug atrapado (Levenshtein vs Indel)
-en `MIGRATION_LOG.md` §19.
-
-### Rendimiento del motor LSH (v2.3.0)
-
-`DiskBasedLSHEngine` se reescribió en v2.3.0. La generación de firmas MinHash
-pasó de un objeto por registro a cálculo vectorizado con NumPy:
-
-| Fase (20k registros RUES) | v2.2.0 | v2.3.0 |
+| Aspecto | Estado | Target |
 |---|---|---|
-| Firmas MinHash | 20.0 s | **1.2 s** (17×) |
-| Motor completo | 32.8 s | **15.6 s** (2.1×) |
+| Tests | ✅ 506/506 pasan | mantener |
+| **Cobertura** | ✅ **58%** (medida 2026-05-26) | 80% (antes de 1.0) |
+| **CI/CD** | ✅ GitHub Actions (lint + test + typecheck + build) | mantener |
+| Ruff | ✅ Sin errores | mantener |
+| Format | ✅ Consistente (`ruff format`) | mantener |
+| **mypy** | ⚠️ Configurado (no bloquea CI por deuda heredada) | strict en 0.9.0 |
+| **Pre-commit** | ✅ Configurado (ruff + mypy + higiene) | mantener |
+| Badge cobertura | ✅ En README | upload a Codecov pendiente (requiere `CODECOV_TOKEN`) |
 
-Además se corrigió un bug latente: el índice usaba `hash()` de Python
-(randomizado por proceso), que corrompía los buckets al reanudar desde
-checkpoint tras un reinicio de Colab. Ahora el pipeline LSH es determinista.
-Detalle en `MIGRATION_LOG.md` §13.
-
-Las reglas de estilo silenciadas para código heredado del notebook están
-documentadas explícitamente en `pyproject.toml` bajo `per-file-ignores`,
-con justificación en `MIGRATION_LOG.md` sección 9.
-
----
-
-## Tests
+Correr tests:
 
 ```bash
-# Todos (89 tests, ~32 s)
-pytest tests/ -v
+# Tests sin cobertura (rápido)
+pytest tests/
 
-# Solo smoke (no requiere deps externas pesadas)
-pytest tests/test_smoke.py -v
+# Tests con cobertura local
+pytest tests/ --cov=record_linkage --cov-report=html
+# Abre htmlcov/index.html para ver detalle
 
-# Solo equivalencia de vectorizaciones
-pytest tests/test_vectorization_equivalence.py -v
+# Subset de tests por fase
+pytest tests/test_fase4_*.py -v
+pytest tests/ -k "not slow"
 
-# Calidad de linkage contra ground truth (Validation Level 3) — NUEVO v2.2.0
-pytest tests/test_quality_golden.py -v -s
+# Lint y format
+ruff check src/ tests/ scripts/
+ruff format --check src/ tests/ scripts/
+
+# Type check
+mypy --config-file=pyproject.toml src/record_linkage/
+
+# Pre-commit (instalar una vez por clon)
+pip install pre-commit
+pre-commit install
+pre-commit run --all-files
 ```
 
-Los **tests de equivalencia** garantizan que cada `.apply` vectorizado produce
-resultados numéricamente idénticos al `.apply` original.
+### Workflows de CI activos
 
-El **test de calidad** (`test_quality_golden.py`) corre el pipeline completo
-sobre 269 registros reales y verifica que F1/precision/recall no retroceden
-respecto al piso de v2.2.0. Es la única prueba que mide si el sistema
-**agrupa bien**, no solo si **corre**.
-
----
-
-## Trazabilidad
-
-Cada clase y función del paquete documenta su celda de origen en el
-notebook fuente. Ver `MIGRATION_LOG.md` para:
-- Qué se incluyó / qué se excluyó
-- Resolución de duplicados (AdvancedValueSelector, MemoryMonitor, SafeSQLiteConnection)
-- Decisión del motor LSH de producción
-- Lista exacta de celdas experimentales descartadas
-- Vectorizaciones aplicadas con prueba de equivalencia
+| Workflow | Trigger | Qué hace |
+|---|---|---|
+| `.github/workflows/ci.yml` | Push y PR a main/master/develop | Lint, typecheck, test matriz Python 3.10/3.11/3.12, build sdist+wheel |
+| `.github/workflows/publish.yml` | Release publicada (manual o tag) | Publica a TestPyPI o PyPI (trusted publishing OIDC) |
 
 ---
 
-## Plan futuro
+## Roadmap hacia 1.0
 
-Ver `CHANGELOG.md` (sección "Próximos pasos") para el roadmap completo.
+Ver [`docs/VERSIONING.md`](docs/VERSIONING.md) para detalle. Resumen:
 
-Lo más relevante:
-- Tests unitarios de lógica de negocio (no solo smoke)
-- Eliminar `_run_L2_legacy` tras 2 corridas exitosas
-- Migración a Snowflake nativo
-- Sphinx + Read the Docs
+```
+0.5.0  Limpiar código legacy (eliminar optuna_integration heredado)
+0.6.0  GitHub Actions + cobertura medida
+0.7.0  Validación contra producción real (1.97M registros)
+0.8.0  Optimización rendimiento (pre-screening LSH)
+0.9.0  Feature freeze + docs completas + API reference
+1.0.0  PUBLICAR EN PyPI con API congelada
+```
+
+---
+
+## Notebooks de ejemplo
+
+| Notebook | Propósito |
+|---|---|
+| `notebooks/01_construir_ground_truth.ipynb` | Construir GT desde fuentes reales (si existe) |
+| `notebooks/02_corrida_basica.ipynb` | Pipeline básico end-to-end (si existe) |
+| `notebooks/03_calibracion_manual.ipynb` | Calibración manual con grid search (si existe) |
+| **[`notebooks/04_optuna_calibration.ipynb`](notebooks/04_optuna_calibration.ipynb)** | **Calibración automática con Optuna** ⭐ |
 
 ---
 
 ## Licencia
 
-Propietario. Reutilización con autorización del autor.
+Apache-2.0. Ver [`LICENSE`](LICENSE).
+
+---
+
+## Reportar problemas
+
+- 🐛 Bug → abrir issue en GitHub con: versión, comando reproducible, traceback
+- 🆕 Feature request → discutir antes de PR (estamos en 0.x, la API cambia)
+- ❓ Pregunta de uso → revisar `docs/` primero, luego abrir discussion
+
+---
+
+> **Construido con disciplina forense:** cada fase tiene su `docs/AUDITORIA_FASE*.md`
+> con metodología, métricas y limitaciones documentadas. La transparencia sobre
+> lo que NO funciona es tan importante como mostrar lo que sí.

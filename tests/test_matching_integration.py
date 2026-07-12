@@ -261,7 +261,7 @@ class TestExportsFromRoot:
 
 
 class TestVersionBumped:
-    def test_version_is_3_2_3(self):
+    def test_version_is_0_7_5(self):
         import record_linkage
 
-        assert record_linkage.__version__ == "3.2.3"
+        assert record_linkage.__version__ == "0.7.6"

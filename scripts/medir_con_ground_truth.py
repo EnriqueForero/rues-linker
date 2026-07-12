@@ -207,6 +207,58 @@ def reporte_por_estrato(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _nit_valido(valor: object) -> bool:
+    """Heurística transparente de NIT válido: >= 5 dígitos tras quitar separadores.
+
+    Los NITs colombianos tienen ~9-10 dígitos; vacío, 'nan', '0' o texto corto
+    cuentan como inválidos. Deliberadamente conservadora y documentada para que
+    la asignación de régimen sea auditable.
+    """
+    if valor is None:
+        return False
+    digitos = "".join(ch for ch in str(valor) if ch.isdigit())
+    return len(digitos) >= 5
+
+
+def reporte_por_regimen(df: pd.DataFrame) -> pd.DataFrame:
+    """Métricas desglosadas por régimen CON_NIT / SIN_NIT.
+
+    Régimen del par = CON_NIT si AMBOS registros tienen NIT válido; SIN_NIT en
+    otro caso. Es el desglose que más importa: el sistema acierta casi perfecto
+    con NIT y sufre sin él, así que un F1 global puede ocultar un SIN_NIT pobre.
+    """
+    if not {"nit_a", "nit_b"}.issubset(df.columns):
+        return pd.DataFrame()
+    work = df.copy()
+    con_nit = work["nit_a"].map(_nit_valido) & work["nit_b"].map(_nit_valido)
+    work["__regimen"] = con_nit.map({True: "CON_NIT", False: "SIN_NIT"})
+    rows = []
+    for regimen, sub in work.groupby("__regimen"):
+        truth = sub["MISMO_GRUPO_bool"].to_numpy()
+        pred = sub["prediccion_sistema"].to_numpy()
+        tp = int((truth & pred).sum())
+        fp = int((~truth & pred).sum())
+        fn = int((truth & ~pred).sum())
+        tn = int((~truth & ~pred).sum())
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        rows.append(
+            {
+                "regimen": regimen,
+                "n": len(sub),
+                "tp": tp,
+                "fp": fp,
+                "fn": fn,
+                "tn": tn,
+                "precision": round(precision, 3),
+                "recall": round(recall, 3),
+                "f1": round(f1, 3),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -281,6 +333,14 @@ def main() -> int:
         print("=" * 60)
         print(rep_estrato.to_string(index=False))
 
+    rep_regimen = reporte_por_regimen(pares_pred)
+    if not rep_regimen.empty:
+        print()
+        print("=" * 60)
+        print("MÉTRICAS POR RÉGIMEN (CON_NIT / SIN_NIT)")
+        print("=" * 60)
+        print(rep_regimen.to_string(index=False))
+
     # ────────────── Reporte Markdown opcional ──────────────
     if args.reporte:
         args.reporte.parent.mkdir(parents=True, exist_ok=True)
@@ -301,6 +361,10 @@ def main() -> int:
             if not rep_estrato.empty:
                 f.write("\n## Métricas por estrato\n\n")
                 f.write(rep_estrato.to_markdown(index=False))
+                f.write("\n")
+            if not rep_regimen.empty:
+                f.write("\n## Métricas por régimen (CON_NIT / SIN_NIT)\n\n")
+                f.write(rep_regimen.to_markdown(index=False))
                 f.write("\n")
         print(f"\n📝 Reporte escrito: {args.reporte}")
 

@@ -30,26 +30,16 @@ from ..processing.text import TextProcessor
 from ..processing.validator import DataValidator
 from ..reporting.data_handler import DataHandler
 from ..reporting.reports import ReportGenerator
-
-# Solo dashboard, suite y visualizer dependen de matplotlib/seaborn/plotly
-# (extra [viz]). Si no están instaladas, quedan como None y el pipeline core
-# sigue operando; solo se omiten los reportes gráficos.
-try:
-    from ..reporting.dashboard import ExecutiveDashboard
-    from ..reporting.suite import EnhancedReportingSuite
-    from ..reporting.visualizer import DataVisualizer
-
-    _REPORTING_AVAILABLE = True
-except ImportError:  # pragma: no cover - depende del extra [viz]
-    ExecutiveDashboard = None  # type: ignore[assignment,misc]
-    EnhancedReportingSuite = None  # type: ignore[assignment,misc]
-    DataVisualizer = None  # type: ignore[assignment,misc]
-    _REPORTING_AVAILABLE = False
-
 from ..utils.logger import CustomLogger
 from ..utils.memory import MemoryManager
 from ..utils.performance import track_performance
-from ._internal import DEFAULT_CONFIG, PROFILES
+
+# v0.7.2 (Sprint 0.8.2, Tarea 2.4): imports de dashboard/suite/visualizer
+# se hacen LAZY dentro de _generate_reports/run para evitar cargar
+# matplotlib/seaborn (~500 MB) cuando el pipeline corre con skip_reporting=True
+# o cuando alguien solo necesita importar las clases del pipeline.
+# La disponibilidad se chequea ahora con _class_exists() en lugar de globals().
+from ._internal import DEFAULT_CONFIG, PROFILES, _class_exists as _class_is_importable
 
 
 class RecordLinkagePipeline:
@@ -805,12 +795,15 @@ class RecordLinkagePipeline:
         os.makedirs(output_dir, exist_ok=True)
 
         # Validar disponibilidad de componentes
+        # v0.7.2 (Tarea 2.4): para los componentes con dependencias pesadas
+        # (matplotlib/seaborn), usamos `_class_is_importable` que hace lazy
+        # import sin cargar matplotlib hasta el primer uso real.
         components_available = {
             "SmartExporter": "SmartExporter" in globals(),
             "ReportGenerator": "ReportGenerator" in globals(),
-            "DataVisualizer": "DataVisualizer" in globals(),
-            "ExecutiveDashboard": "ExecutiveDashboard" in globals(),
-            "EnhancedReportingSuite": "EnhancedReportingSuite" in globals(),
+            "DataVisualizer": _class_is_importable("DataVisualizer"),
+            "ExecutiveDashboard": _class_is_importable("ExecutiveDashboard"),
+            "EnhancedReportingSuite": _class_is_importable("EnhancedReportingSuite"),
         }
 
         self.logger.info("Componentes disponibles:")
@@ -923,6 +916,9 @@ class RecordLinkagePipeline:
             try:
                 self.logger.info("-" * 40)
                 self.logger.info("Generando visualizaciones...")
+                # v0.7.2 (Tarea 2.4): lazy import — matplotlib se carga aquí
+                # solo si efectivamente vamos a generar visualizaciones.
+                from ..reporting.visualizer import DataVisualizer
 
                 visualizer = DataVisualizer(
                     correlative_data=correlative_data,
@@ -942,6 +938,8 @@ class RecordLinkagePipeline:
             try:
                 self.logger.info("-" * 40)
                 self.logger.info("Generando reportes mejorados - EnhancedReportingSuite...")
+                # v0.7.2 (Tarea 2.4): lazy import.
+                from ..reporting.suite import EnhancedReportingSuite
 
                 enhanced_suite = EnhancedReportingSuite(
                     correlative_data=correlative_data,
@@ -969,6 +967,8 @@ class RecordLinkagePipeline:
             try:
                 self.logger.info("-" * 40)
                 self.logger.info("Generando dashboard ejecutivo...")
+                # v0.7.2 (Tarea 2.4): lazy import.
+                from ..reporting.dashboard import ExecutiveDashboard
 
                 dashboard = ExecutiveDashboard(
                     correlative_data=correlative_data,

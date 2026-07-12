@@ -1,5 +1,15 @@
 # ROADMAP a producción — rues-linker
 
+> ⚠️ **DOCUMENTO HISTÓRICO — esquema de versiones anterior.**
+> Este roadmap se redactó **antes** del renumber a SemVer `0.x` (vía
+> `scripts/retag_to_semver.sh`). Usa la numeración vieja `2.x/3.x`, que ya
+> **no** corresponde a la versión publicada. Mapeo de equivalencia:
+> la “versión base v2.14.0” y la “versión objetivo v3.0.0 apto producción”
+> de este texto equivalen, en el esquema vigente, a **la versión actual
+> (`0.7.5`, ver `pyproject.toml`) → `1.0.0`**. Los hitos H1–H5, las cifras y
+> el análisis **siguen siendo válidos**; solo cambió la numeración. La fuente
+> única de verdad de la versión es `pyproject.toml`.
+
 > **Documento de orientación único y final**
 > **Versión base:** v2.14.0 (auditada 2026-05-23)
 > **Versión actual:** v3.0.0 (Fase 2 + parte de H1/H4 ya integradas)

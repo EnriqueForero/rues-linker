@@ -55,17 +55,19 @@ class MemoryManager:
 
     @staticmethod
     def optimize_memory():
+        """Fuerza recolección de basura y mide la RAM realmente liberada.
+
+        Mide el RSS del proceso antes y después de ``gc.collect()`` con
+        psutil. No estima un valor ficticio ni toca internals privados de
+        pandas, que pueden cambiar entre versiones sin aviso.
+        """
+        before_mb = MemoryManager.get_memory_status()["process_mb"]
         collected = gc.collect()
-        if (
-            hasattr(pd, "_libs")
-            and hasattr(pd._libs.lib, "_checknull")
-            and hasattr(pd._libs.lib._checknull, "clear")
-        ):
-            pd._libs.lib._checknull.clear()
         status_after = MemoryManager.get_memory_status()
+        liberado_mb = max(0.0, before_mb - status_after["process_mb"])
         return {
             "objects_collected": collected,
-            "memory_freed_mb": collected * 0.01,
+            "rss_liberado_mb": round(liberado_mb, 1),
             "available_gb_after": status_after["available_gb"],
         }
 

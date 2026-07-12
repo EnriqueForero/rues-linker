@@ -24,6 +24,7 @@ import seaborn as sns
 from matplotlib.gridspec import GridSpec
 
 from ..utils.logger import CustomLogger
+from ._text_utils import strip_emojis as _strip_emojis
 
 
 class DataVisualizer:
@@ -720,6 +721,9 @@ Distribución por umbral:
             time_str = f"{exec_time / 3600:.1f} horas"
 
         # Texto de métricas
+        # v0.7.1 (Tarea 1.4): los emojis se mantienen en el f-string para
+        # legibilidad del código fuente, pero se eliminan antes del render
+        # porque las fuentes de Linux no los renderizan.
         metrics_text = f"""MÉTRICAS PRINCIPALES DE RECORD LINKAGE
 
 📊 Total Registros: {self.metrics.get("total_records", 0):,}
@@ -729,6 +733,7 @@ Distribución por umbral:
 ⏱️ Tiempo Total: {time_str}
 ⚡ Throughput: {self.metrics.get("total_records", 0) / (exec_time + 1):.0f} rec/s
 """
+        metrics_text = _strip_emojis(metrics_text)
 
         ax.text(
             0.5,
@@ -949,7 +954,10 @@ Distribución por umbral:
         quality_items.append(f"🔗 Grupos multi-fuente: {multi_source:,}")
 
         # Mostrar como lista
-        quality_text = "RESUMEN DE CALIDAD\n\n" + "\n".join(quality_items)
+        # v0.7.4 (deuda 0.8.1): sanitizar emojis antes del render — esta era la
+        # fuente del UserWarning 'Glyph 11088 (WHITE MEDIUM STAR) missing' que
+        # quedó sin cerrar en el Sprint 0.8.1.
+        quality_text = _strip_emojis("RESUMEN DE CALIDAD\n\n" + "\n".join(quality_items))
 
         ax.text(
             0.5,

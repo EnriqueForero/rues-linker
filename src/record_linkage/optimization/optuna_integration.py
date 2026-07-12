@@ -1,5 +1,13 @@
 """
-optimization.optuna_integration — record_linkage_pipeline
+optimization.optuna_integration — record_linkage_pipeline (DEPRECATED v3.2.7)
+
+⚠️  DEPRECATED desde v3.2.7. Esta clase es código heredado del notebook
+fuente. Para optimización Optuna sobre el flujo de producción real
+(`Orchestrator.run()`), usar `record_linkage.evaluation.OrchestratorOptimizer`
+(disponible desde v3.2.6).
+
+Por ahora se mantiene importable para retrocompatibilidad, pero emitirá
+DeprecationWarning al usarse. Será removido en v3.3.0.
 
 Componentes:
     - class OptunaIntegration  (origen: notebook celda [167])
@@ -12,6 +20,7 @@ directivas de Jupyter (%%time, !pip, etc.). Ver MIGRATION_LOG.md.
 from __future__ import annotations
 
 import time
+import warnings
 from typing import Any
 
 import numpy as np
@@ -19,6 +28,15 @@ import optuna
 import pandas as pd
 
 from .engine import OptimizationEngine
+
+# v3.2.7 (FASE 4): emitir DeprecationWarning al importar este módulo.
+warnings.warn(
+    "record_linkage.optimization.optuna_integration es DEPRECATED desde v3.2.7. "
+    "Usar record_linkage.evaluation.OrchestratorOptimizer (v3.2.6+) para "
+    "optimización sobre Orchestrator.run(). Será removido en v3.3.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class OptunaIntegration:

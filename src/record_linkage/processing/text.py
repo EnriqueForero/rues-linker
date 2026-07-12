@@ -57,8 +57,45 @@ class TextProcessor:
         Inicializar TextProcessor.
 
         Args:
-            cleaning_mode: 'CONSERVADOR', 'BALANCEADO', o 'AGRESIVO'
-            cache_size: Tamaño máximo del caché LRU
+            cleaning_mode: Modo de limpieza. Default ``'BALANCEADO'``. Opciones:
+
+                - ``'CONSERVADOR'``: limpieza mínima. Elimina TODOS los caracteres
+                  no-alfanuméricos vía ``non_alpha_regex`` (incluidas comillas).
+                  Usa el set de stopwords más pequeño. Apropiado si el dataset
+                  trae nombres muy limpios y no quieres tocar nada agresivamente.
+                  **Conocido**: rompe apóstrofes legítimos (``O'CONNOR`` →
+                  ``CONNOR``); es comportamiento heredado del notebook fuente.
+
+                - ``'BALANCEADO'`` *(default)*: igual que CONSERVADOR en el
+                  tratamiento de caracteres no-alfanuméricos, pero con un set
+                  de stopwords más amplio (``CLEANING_MODES['BALANCEADO']``).
+                  Recomendado para la mayoría de los casos.
+                  **Conocido**: mismo issue de apóstrofes que CONSERVADOR.
+
+                - ``'AGRESIVO'``: limpieza especializada para nombres empresariales
+                  colombianos. Aplica, en este orden:
+
+                    0. ``_strip_quote_artifacts`` *(v0.7.1, Sprint 0.8.1)*:
+                       remueve comillas duplicadas (``''``, ``""``) y comillas
+                       en bordes, preservando apóstrofes legítimos interiores.
+                    1. Corrección de mojibake (UTF-8 mal decodificado).
+                    2. Remoción de ruido administrativo ("EN LIQUIDACIÓN", etc.).
+                    3. Remoción de códigos registrales (NIT, UAP, ALTEX, ...).
+                    4. Puntuación → espacio (excepto comillas, ya tratadas).
+                    5. Estandarización de símbolos (``&`` → ``Y``) e iniciales.
+                    6. Remoción de prefijos legales (``C.I.``, ``S.A. de C.V.``).
+                    7. Remoción de sufijos legales (``S.A.S``, ``LTDA``, ...).
+                    8. Truncamiento en ``/`` o ``(``.
+
+                  Es el modo usado por ``produccion_calibrada`` (F1=0.84 sobre GT).
+
+            cache_size: Tamaño máximo del caché LRU para ``_clean_name_impl``.
+                Default 100_000. Subir si tienes >1M registros con muchos
+                nombres repetidos; bajar si la RAM es crítica.
+
+        Raises:
+            (ninguno) — si ``cleaning_mode`` no es válido, cae a ``BALANCEADO``
+            silenciosamente.
         """
         self.cleaning_mode = cleaning_mode
         self.stopwords = CLEANING_MODES.get(cleaning_mode, CLEANING_MODES["BALANCEADO"])
@@ -272,6 +309,55 @@ class TextProcessor:
             text = pattern.sub("", text)
         return text.strip()
 
+    def _strip_quote_artifacts(self, text: str) -> str:
+        """Elimina comillas literales mal escapadas que vienen del CSV (no del lenguaje).
+
+        Este método ataca el patrón ``''DISENITOS S S ''`` (comillas dobles
+        DENTRO del campo, artefacto típico de CSVs mal escapados — por ejemplo
+        cuando RUES exporta y dobla comillas para escapar al lado de delimitadores).
+
+        DECISIONES DE DISEÑO (v0.7.1, Sprint 0.8.1, Tarea 1.2):
+          • Solo se llama desde modo AGRESIVO. En CONSERVADOR/BALANCEADO el
+            ``non_alpha_regex`` ya elimina TODAS las comillas (junto con todo lo
+            no-alfanumérico). En AGRESIVO la limpieza es selectiva y por eso
+            las comillas literales sobreviven; ahí sí hace falta este sanitizador.
+          • Elimina secuencias de DOS o más comillas idénticas (``''`` o ``""``)
+            que son inequívocamente artefacto de escape de CSV. Las reemplaza
+            por espacio (no por nada) para que ``ACME''CORP`` se vuelva
+            ``ACME CORP`` y no ``ACMECORP``.
+          • Elimina comillas SIMPLES o DOBLES en los extremos del string
+            (envoltura completa del campo).
+          • NO toca comillas simples interiores aisladas — preserva apóstrofes
+            legítimos como ``O'CONNOR`` o ``DON'T``.
+          • Idempotente: aplicar dos veces da el mismo resultado.
+
+        Args:
+            text: Texto crudo (puede tener artefactos de comillas).
+
+        Returns:
+            Texto con artefactos de comillas removidos.
+        """
+        if not text:
+            return text
+
+        # 1) Comillas duplicadas → espacio (NO cadena vacía, para no pegar palabras).
+        #    Aplica a ''   ""   y combinaciones consecutivas (3+ comillas).
+        text = re.sub(r"'{2,}", " ", text)
+        text = re.sub(r'"{2,}', " ", text)
+
+        # 2) Comillas en los extremos del string (envoltura del campo).
+        #    Solo si la comilla está en posición de borde — esto preserva
+        #    apóstrofes legítimos como O'CONNOR (no están en el borde).
+        text = text.strip()
+        while text and text[0] in "'\"":
+            text = text[1:].lstrip()
+        while text and text[-1] in "'\"":
+            text = text[:-1].rstrip()
+
+        # 3) Normalizar espacios múltiples generados por el paso 1.
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
     def _aggressive_clean(self, text: str) -> str:
         """
         Limpieza agresiva especializada para nombres empresariales colombianos.
@@ -289,6 +375,11 @@ class TextProcessor:
         Returns:
             Texto limpiado agresivamente
         """
+        # 0. v0.7.1: Sanear artefactos de comillas literales del CSV
+        #    (caso ''DISENITOS S S '' detectado en el first-run, ver tests
+        #    tests/test_sprint_0_8_1.py::test_caso_real_first_run_disenitos).
+        text = self._strip_quote_artifacts(text)
+
         # 1. Corregir problemas de encoding
         text = self._fix_encoding_issues(text)
 
@@ -406,20 +497,24 @@ class TextProcessor:
         # Convertir a string y eliminar nulos
         series = series.fillna("").astype(str)
 
-        # Aplicar limpieza vectorizada por chunks para optimizar memoria
-        chunk_size = 50_000
-        result_chunks = []
+        # Limpieza sobre valores ÚNICOS y mapeo (no fila a fila con .apply).
+        # En record linkage hay alta duplicación de nombres entre fuentes; limpiar
+        # cada valor único UNA sola vez evita (a) el overhead de dispatch de .apply
+        # sobre n filas y (b) el thrash del LRU cuando |únicos| > cache_size, que
+        # reprocesa nombres ya limpiados. Output bit-idéntico: misma _clean_name_impl
+        # (vía self.clean_name). Cada único se computa exactamente una vez.
+        valores_unicos = series.unique()
+        mapa_limpieza = {valor: self.clean_name(valor) for valor in valores_unicos}
+        result = series.map(mapa_limpieza)
 
-        for start_idx in range(0, len(series), chunk_size):
-            end_idx = min(start_idx + chunk_size, len(series))
-            chunk = series.iloc[start_idx:end_idx]
-
-            # Aplicar limpieza
-            cleaned_chunk = chunk.apply(self.clean_name)
-            result_chunks.append(cleaned_chunk)
-
-        # Combinar resultados
-        result = pd.concat(result_chunks)
+        # Columna de texto en backend PyArrow: ~30-50% menos RAM que 'object',
+        # crítico en Colab Free a escala 2M. Centralizado aquí porque TODO el texto
+        # limpio del pipeline pasa por este único punto (DRY). Si pyarrow no está
+        # disponible, se degrada silenciosamente a 'object'.
+        try:
+            result = result.astype("string[pyarrow]")
+        except (ImportError, TypeError, ValueError):  # pragma: no cover - fallback sin pyarrow
+            pass
 
         # Estadísticas de limpieza
         empty_count = (result == "").sum()

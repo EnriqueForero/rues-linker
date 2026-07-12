@@ -25,10 +25,30 @@ class AdvancedValueSelector:
     """
     Implementa heurísticas avanzadas para seleccionar el NIT y la Razón Social
     óptimos dentro de un grupo, respetando la integridad de las fuentes.
+
+    v3.2.5 (FASE 2): acepta `source_quality_weights` opcional con pesos
+    numéricos por fuente (0.0–1.0). Cuando se proporciona, los pesos se
+    usan como criterio adicional de desempate al elegir el representante.
+    Si no se proporciona, el comportamiento es idéntico a v3.2.4 (orden
+    de prioridad por keys del mapa).
     """
 
-    def __init__(self, source_priority_map: dict[str, int]):
+    def __init__(
+        self,
+        source_priority_map: dict[str, int],
+        source_quality_weights: dict[str, float] | None = None,
+    ):
+        """
+        Args:
+            source_priority_map: dict {SRC: prioridad_int}. Menor = más prioritaria.
+                Construido típicamente con `{src: i for i, src in enumerate(priority_list)}`.
+            source_quality_weights: dict {SRC: peso_float}. Mayor = más confiable.
+                Opcional. v3.2.5 lo usa para desempates en `select_best_name`
+                cuando varios registros de la misma prioridad ofrecen nombres
+                con consenso empatado.
+        """
         self.source_priority_map = source_priority_map
+        self.source_quality_weights = source_quality_weights or {}
         self.SOCIETARY_PATTERNS_REGEX = re.compile(
             r"\b(S\.?A\.?S\.?|LTDA\.?|S\.?A\.?|LIMITADA|E\.?U\.?|CIA|INC)\b", re.IGNORECASE
         )
@@ -72,6 +92,10 @@ class AdvancedValueSelector:
     def select_best_name(self, group_df: pd.DataFrame) -> str:
         """
         Selecciona la Razón Social final aplicando reglas de negocio.
+
+        v3.2.5 (FASE 2): cuando `source_quality_weights` está disponible y
+        hay un empate en la fuente de mayor prioridad (varios registros), se
+        desempata por peso de calidad de fuente antes de aplicar consenso.
         """
         # Regla 1: Singleton
         if len(group_df) == 1:
@@ -95,7 +119,20 @@ class AdvancedValueSelector:
             # Caso ideal: un solo registro de la fuente más confiable
             return priority_records["RAZON_SOCIAL"].iloc[0]
         else:
-            # Desempate: hay varios registros de la fuente prioritaria, aplicar consenso entre ellos
+            # v3.2.5: aprovechamiento de source_quality_weights en desempate.
+            # Si hay pesos definidos, dentro de los registros de la fuente
+            # prioritaria preferimos aquellos cuya fuente tiene mayor peso
+            # numérico. Solo aplica si DENTRO del subconjunto hay >1 fuente
+            # (puede pasar si dos fuentes empatan en prioridad por orden).
+            if self.source_quality_weights and priority_records["SRC"].nunique() > 1:
+                quality_scores = (
+                    priority_records["SRC"].map(self.source_quality_weights).fillna(0.0)
+                )
+                max_quality = quality_scores.max()
+                priority_records = priority_records[quality_scores == max_quality]
+                if len(priority_records) == 1:
+                    return priority_records["RAZON_SOCIAL"].iloc[0]
+            # Desempate final: consenso entre los nombres restantes
             return self._consensus_name(priority_records["RAZON_SOCIAL"].tolist())
 
     def select_best_nit(self, group_df: pd.DataFrame) -> str:

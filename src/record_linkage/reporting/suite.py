@@ -652,7 +652,10 @@ class EnhancedReportingSuite:
                 ax_metrics.add_patch(rect)
 
                 # Contenido
-                ax_metrics.text(x, y + 0.08, icon, fontsize=20, ha="center", va="center")
+                # v0.7.1 (Tarea 1.4): filtrar icono no-ASCII (emojis) que la
+                # fuente del entorno no renderiza y emite UserWarning.
+                _icon_safe = icon if (icon and icon.isascii()) else ""
+                ax_metrics.text(x, y + 0.08, _icon_safe, fontsize=20, ha="center", va="center")
                 ax_metrics.text(
                     x, y - 0.02, value, fontsize=14, fontweight="bold", ha="center", va="center"
                 )
@@ -666,14 +669,16 @@ class EnhancedReportingSuite:
             recommendations = self._generate_quality_recommendations()[:2]
 
             # Panel de hallazgos
-            ax_insights.text(0.05, 0.9, "🔍 HALLAZGOS PRINCIPALES", fontsize=12, fontweight="bold")
+            # v0.7.1 (Tarea 1.4): sin emojis — las fuentes de Linux/Colab no los
+            # renderizan y emiten UserWarning por cada uno.
+            ax_insights.text(0.05, 0.9, "HALLAZGOS PRINCIPALES", fontsize=12, fontweight="bold")
             y_pos = 0.75
             for finding in findings:
                 ax_insights.text(0.07, y_pos, f"• {finding['text']}", fontsize=10, wrap=True)
                 y_pos -= 0.15
 
             # Panel de recomendaciones
-            ax_insights.text(0.52, 0.9, "💡 RECOMENDACIONES", fontsize=12, fontweight="bold")
+            ax_insights.text(0.52, 0.9, "RECOMENDACIONES", fontsize=12, fontweight="bold")
             y_pos = 0.75
             for rec in recommendations:
                 ax_insights.text(0.54, y_pos, f"• {rec}", fontsize=10, wrap=True)
@@ -948,7 +953,11 @@ class EnhancedReportingSuite:
             ax.add_patch(border)
 
             # Contenido
-            ax.text(0.5, 0.75, kpi["icon"], fontsize=20, ha="center", va="center")
+            # v0.7.1 (Tarea 1.4): filtrar icono no-ASCII para evitar UserWarning
+            # de glyph faltante (Liberation Sans no trae emojis).
+            _icon_raw = kpi.get("icon", "") or ""
+            _icon_safe = _icon_raw if _icon_raw.isascii() else ""
+            ax.text(0.5, 0.75, _icon_safe, fontsize=20, ha="center", va="center")
             ax.text(
                 0.5,
                 0.55,
@@ -1367,7 +1376,11 @@ class EnhancedReportingSuite:
                 y = 0.8 - row * 0.15
 
                 # Icono según tipo
-                icon = insight.get("icon", "💡")
+                # v0.7.1 (Tarea 1.4): default ASCII '•' (no '💡'); si el insight
+                # trae un icono emoji, se reemplaza por '•' para que renderice.
+                icon = insight.get("icon", "•")
+                if icon and not icon.isascii():
+                    icon = "•"
                 color = insight.get("color", self.colors["info"])
 
                 ax.text(x - 0.02, y, icon, fontsize=14, ha="right", va="top")

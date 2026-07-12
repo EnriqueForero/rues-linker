@@ -26,6 +26,7 @@ import seaborn as sns
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
 from ..utils.logger import CustomLogger
+from ._text_utils import strip_emojis as _strip_emojis
 
 
 class ExecutiveDashboard:
@@ -589,8 +590,15 @@ class ExecutiveDashboard:
         ax.add_patch(shadow)
 
         # Icono
+        # v0.7.1 (Tarea 1.4): omitir el icono si tiene caracteres no-ASCII
+        # (típicamente emojis que la fuente del entorno no soporta y generan
+        # UserWarning por cada glifo faltante). Los iconos siguen vivos en el
+        # diccionario porque otros consumidores (logs, exports) sí los renderizan
+        # bien; solo aquí — donde matplotlib los pinta — se filtran.
+        _icon_raw = kpi.get("icon", "") or ""
+        _icon_safe = _icon_raw if _icon_raw.isascii() else ""
         ax.text(
-            0.5, 0.75, kpi["icon"], fontsize=24, ha="center", va="center", transform=ax.transAxes
+            0.5, 0.75, _icon_safe, fontsize=24, ha="center", va="center", transform=ax.transAxes
         )
 
         # Valor principal
@@ -1169,6 +1177,8 @@ class ExecutiveDashboard:
             )
 
         # Mostrar issues
+        # v0.7.1 (Tarea 1.4): filtrar icono si tiene caracteres no-ASCII; el
+        # bullet '•' es la alternativa neutra cuando el icono real era un emoji.
         y_pos = 0.85
         for issue in issues[:5]:  # Máximo 5
             color = {
@@ -1177,7 +1187,9 @@ class ExecutiveDashboard:
                 "OK": self.colors["success"],
             }.get(issue["severity"], self.colors["info"])
 
-            ax.text(0.05, y_pos, issue["icon"], fontsize=14, va="top")
+            _icon_raw = issue.get("icon", "") or ""
+            _icon_safe = _icon_raw if _icon_raw.isascii() else "•"
+            ax.text(0.05, y_pos, _icon_safe, fontsize=14, va="top")
             ax.text(0.15, y_pos, issue["issue"], fontsize=9, va="top", wrap=True)
             ax.text(
                 0.9, y_pos, issue["severity"], fontsize=8, va="top", color=color, fontweight="bold"
@@ -1216,7 +1228,9 @@ class ExecutiveDashboard:
             stats.append(f"⚡ Throughput: {throughput:.0f} reg/s")
 
         # Mostrar estadísticas
-        stats_text = "\n\n".join(stats)
+        # v0.7.1 (Tarea 1.4): sanitizar emojis JUSTO antes del render para no
+        # romper la lógica que arma `stats[]` con prefijos visuales.
+        stats_text = _strip_emojis("\n\n".join(stats))
         ax.text(
             0.5,
             0.5,
@@ -1236,9 +1250,10 @@ class ExecutiveDashboard:
         recommendations = self._generate_recommendations()
 
         # Mostrar recomendaciones
+        # v0.7.1 (Tarea 1.4): bullet ASCII en lugar de 💡, que no renderiza.
         y_pos = 0.85
         for _i, rec in enumerate(recommendations[:4]):
-            ax.text(0.05, y_pos, f"💡 {rec}", fontsize=9, va="top", wrap=True)
+            ax.text(0.05, y_pos, f"• {rec}", fontsize=9, va="top", wrap=True)
             y_pos -= 0.22
 
     def _generate_recommendations(self) -> list[str]:
@@ -1373,7 +1388,9 @@ class ExecutiveDashboard:
             metrics.append(f"⚡ Velocidad: {' | '.join(phase_speeds)}")
 
         # Mostrar métricas
+        # v0.7.1 (Tarea 1.4): sanitizar emojis antes del render matplotlib.
         metrics_text = "\n\n".join(metrics) if metrics else "No hay métricas avanzadas disponibles"
+        metrics_text = _strip_emojis(metrics_text)
         ax.text(
             0.5,
             0.5,

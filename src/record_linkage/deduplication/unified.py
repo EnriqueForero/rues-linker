@@ -50,18 +50,23 @@ def deduplicate_unified(
     `trusted_sources` declarado.
 
     Evidencia medida sobre el ground truth grande (12.427 registros,
-    CON_NIT + SIN_NIT mezclados):
+    CON_NIT + SIN_NIT mezclados), profile produccion_calibrada, v0.7.4:
 
-        deduplicate_unified (este método):      F1 = 0.563
-        Orchestrator con trusted sources:       F1 = 0.875
+        deduplicate_unified (este método):   F1 global = 0.563
+            - CON_NIT: F1 = 0.961 (P=0.972, R=0.950)  ← confiable
+            - SIN_NIT: F1 = 0.217 (P=0.123, R=0.921)  ← SOBRE-FUSIÓN
+        Orchestrator + produccion_calibrada: F1 global = 0.842
+            - CON_NIT: F1 = 0.960 (P=1.000, R=0.922)
+            - SIN_NIT: F1 = 0.000 (P=0.000, R=0.000)  ← NO FUSIONA NADA
 
-    Diferencia: 31 puntos porcentuales. La razón: este método no separa
-    regímenes y el LSH colapsa grupos con tokens compartidos en SIN_NIT.
-
-    Uso correcto:
-        - Una sola fuente: OK
-        - Múltiples fuentes pero todas con NIT y régimen homogéneo: OK
-        - Mezcla CON_NIT/SIN_NIT desde fuentes distintas: usar Orchestrator
+    Conclusión honesta: NINGUNA de las dos configuraciones resuelve SIN_NIT.
+    deduplicate_unified sobre-fusiona (precision 0.12); el perfil calibrado
+    con nit_empty_passes_filter=False no fusiona nada sin NIT (recall 0).
+    El régimen SIN_NIT (importadores extranjeros sin identificador estable,
+    nombres y ciudades inconsistentes) es deuda técnica conocida sin fix por
+    parámetros — ver docs/DEUDA_SIN_NIT.md. Para CON_NIT ambos caminos rinden
+    F1≈0.96; Orchestrator tiene precision perfecta. Usar Orchestrator con
+    trusted_sources para datos multi-fuente con NIT.
     ────────────────────────────────────────────────────────────
 
     VERSIÓN FINAL:
@@ -113,6 +118,27 @@ def deduplicate_unified(
         raise ValueError("DataFrame de entrada está vacío")
     if col_nit not in df_input.columns or col_name not in df_input.columns:
         raise ValueError(f"Columnas requeridas {col_nit}, {col_name} no encontradas")
+
+    # v0.7.4 (cierre de deuda): advertir sobre uso en mezcla CON_NIT/SIN_NIT.
+    # Evidencia medida: en datos mixtos este método da F1 global 0.563 por
+    # sobre-fusión del régimen SIN_NIT (ver docs/DEUDA_SIN_NIT.md). El docstring
+    # ya lo advierte, pero una advertencia en runtime es más difícil de ignorar.
+    # Heurística: si una fracción significativa de filas tiene NIT vacío Y otra
+    # fracción significativa lo tiene presente, es una mezcla de regímenes.
+    _nit_col = df_input[col_nit].astype(str).str.strip()
+    _empty_frac = (_nit_col.isin(["", "nan", "None", "<NA>"]) | df_input[col_nit].isna()).mean()
+    if 0.05 < _empty_frac < 0.95:
+        import warnings
+
+        warnings.warn(
+            f"deduplicate_unified detectó mezcla de regímenes: {_empty_frac:.0%} de "
+            f"las filas tienen NIT vacío y el resto lo tienen presente. En datos "
+            f"mixtos CON_NIT/SIN_NIT este método sobre-fusiona el régimen sin NIT "
+            f"(F1 global ~0.56 medido). Para multi-fuente con NIT, considera "
+            f"Orchestrator con trusted_sources. Ver docs/DEUDA_SIN_NIT.md.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # 1b. Validación fail-fast de extra_features (v2.7.0).
     # Mejor un error explícito ahora que un feature silenciosamente inerte

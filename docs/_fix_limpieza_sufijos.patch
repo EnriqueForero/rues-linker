@@ -1,0 +1,20 @@
+--- a/src/record_linkage/processing/text.py
++++ b/src/record_linkage/processing/text.py
+@@ -436,7 +436,16 @@
+             if self.cleaning_mode == "AGRESIVO":
+                 text = self._aggressive_clean(text)
+             else:
+-                # Modo estándar: solo reemplazar no-alfanuméricos
++                # FIX (Colombia): en los modos no-AGRESIVO también hay que quitar
++                # los sufijos legales y colapsar siglas. Antes solo se hacía en
++                # AGRESIVO, así que "S.A.S." pasaba por non_alpha -> "S A S" y el
++                # filtro de stopwords lo dejaba en "S S" (basura de una sola letra
++                # que destruía el nombre, p.ej. "Comercial Andina S.A.S." -> "S S").
++                # Los patrones de sufijo operan sobre el texto CON puntos, por eso
++                # se aplican ANTES de convertir lo no-alfanumérico en espacios.
++                text = self._remove_patterns(text, self.legal_suffixes_patterns)
++                text = self._remove_patterns(text, self.legal_suffixes_patterns)
++                text = self._clean_initials_and_symbols(text)
+                 text = self.non_alpha_regex.sub(" ", text)
+ 
+             # Normalizar espacios

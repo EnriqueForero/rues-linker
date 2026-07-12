@@ -4,7 +4,7 @@ Expone `linkage()`, el punto de entrada único y recomendado para producción.
 Encapsula la construcción de configuración + Orchestrator en una sola llamada,
 de modo que el usuario no necesite conocer la estructura interna del paquete.
 
-Diseño (v3.0.0):
+Diseño:
     - Un solo camino: siempre vía Orchestrator (motor en disco).
     - Multi-fuente y multi-variable de fábrica.
     - `trusted_sources` para fuentes con identidad verificada (NIT confiable).
@@ -55,11 +55,11 @@ def linkage(
             parquet) se escriben ahí. Si es None, se usa un temporal.
         profile: perfil de configuración. Ver `record_linkage.config.profiles`.
             Para fuentes sin NIT usar "deduplication_sin_nit_conservador".
-        matching_profile: **NUEVO en v3.2.0**. MatchingProfile (de
+        matching_profile: MatchingProfile (de
             ``record_linkage.matching``) o string para activar refinamiento
             multi-variable post-clustering. Opciones:
               - None (default): pipeline core sin refinamiento. Comportamiento
-                idéntico a v3.0.0/v3.1.0.
+                idéntico al comportamiento sin matcher.
               - "colombia": aplica ``default_colombia_profile()``.
               - "international": aplica ``default_international_profile()``.
               - Instancia de MatchingProfile: usa ese profile exacto.
@@ -80,7 +80,7 @@ def linkage(
             - "matcher_stats": dict con métricas de la refinación.
             - "matcher_decisions": DataFrame con decisión por par evaluado.
 
-    Ejemplo (v3.2.0 con matcher):
+    Ejemplo (con matcher):
         >>> from record_linkage import linkage
         >>> result = linkage(
         ...     sources={"RUES": df_rues, "DIAN": df_dian, "CRM": df_crm},
@@ -93,10 +93,10 @@ def linkage(
         >>> print(result["matcher_stats"])  # cuántos clusters se separaron
         >>> result["correlative"].to_parquet("correlativa.parquet")
 
-    Ejemplo (legacy v3.0.0, sin matcher):
+    Ejemplo (sin matcher):
         >>> result = linkage(sources={"RUES": df})  # mismo comportamiento que antes
 
-    Nota sobre calidad medida (ground truth sintético v2.14.0):
+    Nota sobre calidad medida (ground truth sintético):
         Las cifras del docstring previas (F1 ≈ 0.875) NO eran trazables.
         Para benchmarks reproducibles, ejecutar:
             scripts/benchmark_e2e_matcher.py
@@ -134,7 +134,7 @@ def linkage(
     orchestrator = Orchestrator(config=config, sources=sources, work_dir=work_dir)
     result = orchestrator.run()
 
-    # ── v3.2.0: refinamiento opt-in con MatcherPostProcessor ──────────
+    # ── Refinamiento opt-in con MatcherPostProcessor ──────────
     if matching_profile is not None:
         from .matching import (
             MatcherPostProcessor,

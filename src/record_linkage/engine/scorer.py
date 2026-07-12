@@ -13,6 +13,7 @@ directivas de Jupyter (%%time, !pip, etc.). Ver MIGRATION_LOG.md.
 from __future__ import annotations
 
 import gc
+import logging
 import os
 import sqlite3
 import time
@@ -81,6 +82,19 @@ class VectorizedScorer:
             )
 
         self.batch_size = int(self.profile.get("scoring_batch_size", 50_000))
+
+        # ── v3.2.4 (FIX FASE 1): COMPORTAMIENTO DE NIT VACÍO EN FILTRO ───────
+        # `nit_empty_passes_filter` (bool, default True para retrocompatibilidad):
+        #     Hasta v3.2.3 inclusive, los pares con NIT vacío en algún lado
+        #     reciben `nit_distance == -1` (sentinela). Como `-1 <= max_nit_distance`
+        #     para cualquier max_nit_distance ≥ 0, esos pares PASABAN el filtro NIT
+        #     sin evidencia, propagándose al scoring solo con similitud de nombre.
+        #     Esto genera FP masivos en regímenes SIN_NIT (importadores extranjeros,
+        #     personas naturales sin RUT). v3.2.4 introduce el flag para permitir
+        #     que el filtro requiera evidencia explícita de NIT. Default True
+        #     conserva el comportamiento heredado; recomendado False para
+        #     pipelines calibrados contra ground truth.
+        self.nit_empty_passes_filter = bool(self.profile.get("nit_empty_passes_filter", True))
 
         # ── v2.8.0 (P0-1): TRATAMIENTO PRIVILEGIADO DE NIT IDÉNTICO ────────
         # Diagnóstico documentado en MIGRATION_LOG §18. Ver §21 (v2.10.0)
@@ -257,8 +271,32 @@ class VectorizedScorer:
         Returns:
             DataFrame con columnas: idx_0, idx_1, score, name_sim, nit_dist
         """
-        # esto es para tomar una muestra de 5 observaciones.
-        self._audit_counters = {"passes_printed": 0, "fails_printed": 0, "max_prints": 5}
+        # ─── v0.7.1 (Sprint 0.8.1, Tarea 1.1): AUDITORÍA DE PARES OPT-IN ───
+        # Hasta v0.7.0 los bloques "AUDITANDO PAR" se emitían SIEMPRE con
+        # `print(...)` directo, contaminando stdout en cada chunk de scoring
+        # (~50 bloques por corrida grande). Ahora son DEBUG en el logger y
+        # default desactivado (max_prints=0). Para activar:
+        #   1) en el profile:           profile["audit_pairs_count"] = 5
+        #   2) por variable de entorno: RUES_LINKER_AUDIT_PAIRS=5
+        # La env var pisa al profile (útil para corridas ad-hoc en Colab).
+        _env_audit = os.environ.get("RUES_LINKER_AUDIT_PAIRS")
+        if _env_audit is not None:
+            try:
+                _max_prints = max(0, int(_env_audit))
+            except ValueError:
+                _max_prints = 0
+        else:
+            _max_prints = int(self.profile.get("audit_pairs_count", 0))
+        self._audit_counters = {
+            "passes_printed": 0,
+            "fails_printed": 0,
+            "max_prints": _max_prints,
+        }
+        # Si el opt-in está activo, asegurar que el logger del scorer pueda emitir
+        # DEBUG. CustomLogger por defecto crea loggers en nivel INFO con propagate=False,
+        # así que sin este ajuste los mensajes de auditoría nunca se verían.
+        if _max_prints > 0:
+            self.logger.logger.setLevel(logging.DEBUG)
         # Detectar tipo de entrada
         if isinstance(candidates, str) and candidates.endswith(".db"):
             # Es una ruta a archivo SQLite
@@ -375,10 +413,13 @@ class VectorizedScorer:
 
         # ═══════════════════════════════════════════════════════════════════════
         # CONTADORES PARA AUDITORÍA MUESTREADA
-        # Limita la cantidad de ejemplos impresos para no saturar el log
+        # v0.7.1: este init defensivo se mantiene por si _compute_scores_batch_vectorized
+        # se llama sin pasar por score_pairs(). El default es 0 (deshabilitado) en
+        # línea con la política de Sprint 0.8.1; quien invoca directo y necesite
+        # auditoría debe inicializar _audit_counters explícitamente antes.
         # ═══════════════════════════════════════════════════════════════════════
         if not hasattr(self, "_audit_counters"):
-            self._audit_counters = {"passes_printed": 0, "fails_printed": 0, "max_prints": 5}
+            self._audit_counters = {"passes_printed": 0, "fails_printed": 0, "max_prints": 0}
 
         n_pairs = len(batch_candidates)
 
@@ -561,7 +602,13 @@ class VectorizedScorer:
 
         # Crear máscaras de filtro
         name_filter_mask = name_similarities >= self.min_name_similarity
-        nit_filter_mask = nit_distances <= self.max_nit_distance
+        # v3.2.4 (FIX FASE 1): si nit_empty_passes_filter=False, los pares con
+        # NIT vacío en algún lado (nit_distance == -1) NO pasan el filtro.
+        # Comportamiento previo (default True) preservado para no romper tests.
+        if self.nit_empty_passes_filter:
+            nit_filter_mask = nit_distances <= self.max_nit_distance
+        else:
+            nit_filter_mask = (nit_distances >= 0) & (nit_distances <= self.max_nit_distance)
         valid_pairs_mask = name_filter_mask & nit_filter_mask
 
         # ── v2.8.0 (P0-1): override por NIT idéntico ──────────────────────
@@ -600,21 +647,35 @@ class VectorizedScorer:
 
             for i in audit_indices:
                 passes = valid_pairs_mask[i]
-                print(
-                    f"\n{'-' * 20} AUDITANDO PAR ({df.iloc[idx_0[i]].name}, {df.iloc[idx_1[i]].name}) {'-' * 20}"
+                # v0.7.1 (Sprint 0.8.1, Tarea 1.1): consolidado a logger.debug
+                # — antes eran 8 print() por par, ahora 1 mensaje multilínea.
+                _idx_pair = (df.iloc[idx_0[i]].name, df.iloc[idx_1[i]].name)
+                _decision = "SÍ" if passes else "NO"
+                self.logger.debug(
+                    "AUDIT PAIR %s%s"
+                    "  Nombres: %r vs %r%s"
+                    "  NITs:    %r vs %r%s"
+                    "  Sim Nombre: %.4f (umbral=%s) -> pasa=%s%s"
+                    "  Dist NIT:   %s (umbral=%s) -> pasa=%s%s"
+                    "  Decisión: pasa ambos filtros = %s",
+                    _idx_pair,
+                    "\n",
+                    names_0[i],
+                    names_1[i],
+                    "\n",
+                    nits_0[i],
+                    nits_1[i],
+                    "\n",
+                    name_similarities[i],
+                    self.min_name_similarity,
+                    name_filter_mask[i],
+                    "\n",
+                    nit_distances[i],
+                    self.max_nit_distance,
+                    nit_filter_mask[i],
+                    "\n",
+                    _decision,
                 )
-                print(f"  Nombres: '{names_0[i]}' vs '{names_1[i]}'")
-                print(f"  NITs:    '{nits_0[i]}' vs '{nits_1[i]}'")
-                print("  --- Cálculos de Filtro Previo ---")
-                print(
-                    f"  Similitud Nombre: {name_similarities[i]:.4f} (Umbral Requerido: {self.min_name_similarity}) -> ¿Pasa? {name_filter_mask[i]}"
-                )
-                print(
-                    f"  Distancia NIT:    {nit_distances[i]} (Umbral Requerido: {self.max_nit_distance}) -> ¿Pasa? {nit_filter_mask[i]}"
-                )
-                print("  --- Decisión ---")
-                print(f"  ¿Pasa AMBOS filtros? {'SÍ' if passes else 'NO'}")
-                print("-" * 74)
 
             # Actualizar contadores
             self._audit_counters["passes_printed"] += len(pass_idx)
