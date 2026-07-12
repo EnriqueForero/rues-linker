@@ -135,6 +135,11 @@ class MinHashCache:
           - Los parámetros del hashing (num_perm, ngram, seed) → si alguno
             cambia, la key cambia, así que NUNCA se reusa una firma de otro
             esquema.
+          - Las versiones de datasketch y de esta librería (v0.8.0, F0.3):
+            datasketch 2.0 demostró que un major de la dependencia produce
+            hashvalues distintas con el mismo input+seed (CHANGELOG [0.7.6]);
+            la versión propia cubre cambios en el shingling. Un cache
+            generado bajo otro esquema jamás se reusa.
           - El número total de filas (descarta colisiones triviales entre
             datasets de tamaños distintos).
           - Una muestra de la columna del contenido (cada ``_HASH_STRIDE``
@@ -170,9 +175,20 @@ class MinHashCache:
         n = len(values)
 
         h = hashlib.sha256()
+        # Versiones que definen el ESQUEMA de las firmas (F0.3, v0.8.0).
+        import datasketch  # local: barato (pocas llamadas por corrida)
+
+        try:
+            from importlib.metadata import version as _pkg_version
+
+            _rl_version = _pkg_version("rues-linker")
+        except Exception:  # pragma: no cover - checkout sin instalar
+            _rl_version = "0.0.0+sin.instalar"
+
         # Parámetros que afectan la firma — orden estable.
         h.update(
             f"fmt={MinHashCache.FORMAT_VERSION};"
+            f"ds={datasketch.__version__};rl={_rl_version};"
             f"perm={num_perm};ngram={ngram};seed={seed};"
             f"n={n};col={column};".encode()
         )

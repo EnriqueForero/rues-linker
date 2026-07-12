@@ -1,0 +1,63 @@
+# Bump mensual de dependencias, GATEADO (F0.2): sube las dependencias a lo
+# último que permiten los rangos de pyproject, corre la suite completa y, si
+# está verde, abre un PR con el constraints regenerado. Los saltos de versión
+# se descubren en un PR controlado, no en una publicación bloqueada.
+#
+# Requisito del repo: Settings → Actions → General →
+#   "Allow GitHub Actions to create and approve pull requests".
+name: Deps bump mensual
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"   # día 1 de cada mes
+  workflow_dispatch: {}
+
+jobs:
+  bump-y-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar con upgrade agresivo (dentro de los rangos)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" --upgrade --upgrade-strategy eager
+      - name: Gate completo (suite entera, incluye slow)
+        run: pytest tests/ -q --tb=short
+      - name: Regenerar constraints con lo validado
+        run: |
+          python - <<'EOF'
+          from datetime import date
+          from importlib.metadata import version as v
+          deps = ["pandas","numpy","pyarrow","scipy","scikit-learn",
+                  "networkx","datasketch","rapidfuzz","psutil","pytz",
+                  "tqdm","openpyxl","h5py"]
+          cab = (
+              "# constraints/runtime-validado.txt — Entorno de runtime "
+              "VALIDADO (F0.2)\n#\n"
+              f"# Regenerado por deps-bump: {date.today().isoformat()} · "
+              "gate completo verde en CI.\n"
+              "# Uso:  pip install -e . -c constraints/runtime-validado.txt\n"
+              "#\n"
+          )
+          cuerpo = "\n".join(f"{d}=={v(d)}" for d in deps) + "\n"
+          open("constraints/runtime-validado.txt", "w").write(cab + cuerpo)
+          EOF
+      - name: Abrir PR con el bump validado
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: deps/bump-mensual
+          commit-message: "chore(deps): bump mensual gateado (suite verde)"
+          title: "Deps bump mensual — suite completa verde"
+          body: |
+            Bump automático dentro de los rangos de `pyproject.toml`.
+            El gate completo (suite entera, incluye slow) corrió VERDE con
+            estas versiones antes de abrir este PR. Revise el diff de
+            `constraints/runtime-validado.txt` y mezcle si está de acuerdo.
+          add-paths: constraints/runtime-validado.txt

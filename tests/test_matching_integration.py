@@ -264,4 +264,4 @@ class TestVersionBumped:
     def test_version_is_0_7_5(self):
         import record_linkage
 
-        assert record_linkage.__version__ == "0.7.6"
+        assert record_linkage.__version__ == "0.8.0"

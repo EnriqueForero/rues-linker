@@ -28,7 +28,7 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("rues-linker")
 except PackageNotFoundError:  # pragma: no cover - checkout sin instalar
-    __version__ = "0.7.6"
+    __version__ = "0.8.0"  # centinela: nunca una versión real
 
 # ── API pública de alto nivel ─────────────────────────────────────────
 # `linkage()` es el punto de entrada recomendado. Las demás se exponen para

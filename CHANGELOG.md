@@ -14,6 +14,72 @@ y [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.0] — 2026-07-12 — Fase 0 del playbook: consolidación y blindaje
+
+### Resumen
+
+Primera fase del playbook de evolución (2026-07-11). No cambia el
+comportamiento del pipeline (baseline v0_9_0 intacto, 16/16 re-verificado);
+blinda el proyecto contra las clases de fallo del incidente datasketch:
+deriva de dependencias, incoherencia de versión, caches de otro esquema y
+percolación silenciosa.
+
+### Added
+- **Canario de percolación** (`tests/test_canario_percolacion.py`, slow):
+  sobre la ruta de producción (`deduplicate_auto`, GT 12.427), el clúster
+  predicho máximo por régimen no puede exceder 2× el grupo verdadero máximo.
+  Calibración medida 2026-07-12: CON_NIT pred_max=18 ≤ 22; SIN_NIT
+  pred_max=9 ≤ 18; corrida 150.7 s. El clúster de 563 del incidente habría
+  disparado este gate de inmediato. K=2 ajustable solo con acta.
+- **Contrato de determinismo** (`tests/test_determinismo_contrato.py`):
+  doble corrida de `deduplicate_auto` sobre dataset sintético inline →
+  correlativas idénticas (ID_GRUPO fila a fila + SHA-256). Sin dependencias
+  de archivos: verificable en cualquier clon limpio.
+- **Invalidación del cache por versión** (`tests/test_cache_version_key.py`):
+  congela el contrato nuevo de la clave (ver Changed) y re-verifica los
+  contratos previos (params/contenido).
+- **`constraints/runtime-validado.txt`**: versiones exactas del entorno que
+  validó esta versión (13 paquetes, Python 3.12, gate 16/16). Uso:
+  `pip install -e . -c constraints/runtime-validado.txt`. Se actualiza solo
+  vía deps-bump o con acta.
+- **`scripts/verificar_coherencia_version.py`**: pyproject == CHANGELOG tope
+  == distribución instalada, y el fallback de `__init__` debe ser el
+  centinela. Integrado como paso del job `test` en `ci.yml`.
+- **Workflow `nightly.yml`**: instala dependencias frescas (rangos de
+  pyproject, sin constraints) y corre la suite COMPLETA (incluye slow:
+  baseline + canario). Detecta deriva de dependencias el día que ocurre,
+  no el día que bloquea una publicación.
+- **Workflow `deps-bump.yml`** (mensual, gateado): upgrade agresivo dentro
+  de los rangos → suite completa → si verde, PR con el constraints
+  regenerado. Requiere habilitar "Allow GitHub Actions to create PRs".
+
+### Changed
+- **Clave del cache MinHash** (`engine/lsh/cache.py::compute_key`): ahora
+  incluye `ds=<versión datasketch>;rl=<versión rues-linker>`. Firmas
+  generadas bajo otro esquema jamás se reusan (deuda del diagnóstico
+  0.7.6, cerrada). Efecto único: invalidación de caches preexistentes
+  (recomputan una vez); cero cambio en resultados.
+- **Cotas de major en dependencias algorítmicas** (`pyproject.toml`):
+  `scikit-learn<2`, `networkx<4`, `rapidfuzz<4` (datasketch<2.0 venía de
+  0.7.6). Validado con las versiones instaladas (sklearn 1.8.0,
+  networkx 3.6.1, rapidfuzz 3.14.5) y gate verde.
+- **Fallback de versión** (`src/record_linkage/__init__.py`): `"3.2.3"` →
+  centinela `"0.0.0+sin.instalar"`. Un fallback con pinta de versión real
+  fue co-causa de la publicación incoherente diagnosticada en 0.7.6.
+- `.gitignore`: añade `runs/` y `.ruff_cache/`.
+- Versión 0.7.6 → 0.8.0 (pyproject y assert de
+  `tests/test_matching_integration.py`).
+
+### Notes
+- `tests/data/baseline_v0_9_0.json` NO se regenera: cero cambio de
+  comportamiento; el gate 16/16 se re-corrió verde tras estos cambios.
+- Pendientes de la Fase 0 que viven fuera del repo (lado Colab/GitHub):
+  publicar main con esta versión, verificar CI verde en GitHub, decidir
+  TestPyPI→PyPI, y borrar del árbol de Drive los artefactos `runs/` y
+  `build/` de la era 3.x (el consolidador y el build ya los excluyen).
+
+---
+
 ## [0.7.6] — 2026-07-11 — Pin de compatibilidad: datasketch < 2.0
 
 ### Resumen
