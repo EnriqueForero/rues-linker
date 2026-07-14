@@ -28,15 +28,29 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("rues-linker")
 except PackageNotFoundError:  # pragma: no cover - checkout sin instalar
-    __version__ = "0.8.0"  # centinela: nunca una versión real
+    __version__ = "0.10.0"  # centinela: nunca una versión real
 
 # ── API pública de alto nivel ─────────────────────────────────────────
 # `linkage()` es el punto de entrada recomendado. Las demás se exponen para
 # casos específicos. Import defensivo: una dependencia opcional ausente no
 # debe romper `import record_linkage`.
-from .api import linkage
+from .api import ResultadoLinkage, dedupe, link, linkage
 from .config.paths import Rutas
+from .config.profiles import get_profile
 from .config.settings import Config
+from .matching.campos import (
+    CampoSpec,
+    EsquemaCampos,
+    PoliticaFaltante,
+    TipoCampo,
+    esquema_multicampo_completo,
+    esquema_rues,
+)
+from .matching.motor_multicampo import (
+    ResultadoMulticampo,
+    clusters_desde_decisiones,
+    evaluar_esquema,
+)
 
 try:
     from .deduplication.unified import deduplicate_unified
@@ -83,19 +97,32 @@ except ImportError:  # pragma: no cover
     default_international_profile = None  # type: ignore[assignment]
 
 __all__ = [
+    "CampoSpec",
     "Config",
+    "EsquemaCampos",
     "MatcherPostProcessor",
     "MatchingProfile",
     "Orchestrator",
+    "PoliticaFaltante",
+    "ResultadoLinkage",
+    "ResultadoMulticampo",
     "Rutas",
+    "TipoCampo",
     "VariableMatcher",
     "VariableSpec",
     "__version__",
+    "clusters_desde_decisiones",
     "crear_config_orchestrator",
+    "dedupe",
     "deduplicate_auto",
     "deduplicate_unified",
     "default_colombia_profile",
     "default_international_profile",
+    "esquema_multicampo_completo",
+    "esquema_rues",
+    "evaluar_esquema",
     "evaluar_pares",
+    "get_profile",
+    "link",
     "linkage",
 ]

@@ -28,6 +28,11 @@ Contacto
 
 Geo y dirección
     - ``CityNormalizedEqual``: ciudad exacta tras normalización ASCII/upper.
+    - ``GeoHaversine``: distancia haversine con radio (arrays (n,2) lat/lon).
+
+Fecha y numérico (F2.2)
+    - ``FechaDelta``: delta en días con tolerancia, firmado.
+    - ``NumericoRelativo``: diferencia relativa con tolerancia.
     - ``AddressTokenSet``: tokens normalizados con stop-words de direcciones.
 
 Combinador y helpers
@@ -588,3 +593,124 @@ class AddressTokenSet:
             / 100.0
         )
         return np.where(both, 2.0 * scores - 1.0, 0.0)
+
+
+class FechaDelta:
+    """Fecha con tolerancia en días (F2.2). Rango ``[-1, +1]`` (firmado).
+
+    Espera fechas normalizadas a ISO 'YYYY-MM-DD' ('' = faltante, ver
+    ``normalizadores.normalizar_fecha``). Similitud lineal::
+
+        delta = |a - b| en días
+        sim   = clip(1 - delta/tolerancia, -1, +1)
+
+    → delta 0 → +1.0 · delta = tolerancia → 0.0 · delta ≥ 2·tolerancia → −1.0
+    Faltante o inválida en cualquier lado → 0.0 (neutro; salvaguarda F2.4).
+    """
+
+    signed = True
+
+    def __init__(self, dias_tolerancia: int = 30) -> None:
+        if dias_tolerancia < 1:
+            raise ValueError(f"dias_tolerancia={dias_tolerancia} debe ser >= 1.")
+        self.dias_tolerancia = int(dias_tolerancia)
+        self.name = f"fecha_delta_{self.dias_tolerancia}d"
+
+    def compare(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
+        n = len(left)
+        if n == 0:
+            return np.zeros(0, dtype=np.float64)
+        dl = pd.to_datetime(pd.Series(left), errors="coerce")
+        dr = pd.to_datetime(pd.Series(right), errors="coerce")
+        ok = (dl.notna() & dr.notna()).to_numpy()
+        out = np.zeros(n, dtype=np.float64)
+        if not ok.any():
+            return out
+        delta = (dl - dr).dt.days.abs().to_numpy(dtype="float64")
+        sim = np.clip(1.0 - delta / float(self.dias_tolerancia), -1.0, 1.0)
+        out[ok] = sim[ok]
+        return out
+
+
+class GeoHaversine:
+    """Geolocalización por distancia haversine con radio (F2.2). Rango ``[0, 1]``.
+
+    CONTRATO DE FORMA: ``left`` y ``right`` son arrays float de forma
+    ``(n, 2)`` con columnas ``[lat, lon]`` (ver ``normalizadores.
+    normalizar_geo``). NaN en cualquier coordenada → 0.0 (faltante neutro).
+
+    Similitud lineal: ``sim = clip(1 - dist_km/radio_km, 0, 1)`` — a 0 km es
+    1.0 y a partir del radio es 0.0. No firmado a propósito: estar lejos no
+    debe vetar por sí solo (dos sedes de la misma empresa pueden distar km).
+    """
+
+    signed = False
+
+    _R_TIERRA_KM = 6371.0088
+
+    def __init__(self, radio_km: float = 1.0) -> None:
+        if radio_km <= 0:
+            raise ValueError(f"radio_km={radio_km} debe ser > 0.")
+        self.radio_km = float(radio_km)
+        self.name = f"geo_haversine_{self.radio_km:g}km"
+
+    def compare(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
+        la = np.asarray(left, dtype=np.float64)
+        ra = np.asarray(right, dtype=np.float64)
+        if la.ndim != 2 or la.shape[1] != 2 or ra.shape != la.shape:
+            raise ValueError(
+                f"GeoHaversine espera arrays (n, 2) [lat, lon]; recibió {la.shape} y {ra.shape}."
+            )
+        n = la.shape[0]
+        if n == 0:
+            return np.zeros(0, dtype=np.float64)
+        ok = ~np.isnan(la).any(axis=1) & ~np.isnan(ra).any(axis=1)
+        out = np.zeros(n, dtype=np.float64)
+        if not ok.any():
+            return out
+        lat1, lon1 = np.radians(la[:, 0]), np.radians(la[:, 1])
+        lat2, lon2 = np.radians(ra[:, 0]), np.radians(ra[:, 1])
+        dlat, dlon = lat2 - lat1, lon2 - lon1
+        h = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0) ** 2
+        dist = 2.0 * self._R_TIERRA_KM * np.arcsin(np.sqrt(np.clip(h, 0.0, 1.0)))
+        sim = np.clip(1.0 - dist / self.radio_km, 0.0, 1.0)
+        out[ok] = sim[ok]
+        return out
+
+
+class NumericoRelativo:
+    """Numérico por diferencia relativa con tolerancia (F2.2). Rango ``[0, 1]``.
+
+    ``rel = |a − b| / max(|a|, |b|)``; ``sim = clip(1 − rel/tolerancia, 0, 1)``.
+    Ambos exactamente cero → 1.0. No numérico o faltante → 0.0 (neutro).
+    Acepta strings canónicos de ``normalizadores.normalizar_numero`` o floats.
+    """
+
+    signed = False
+
+    def __init__(self, tolerancia: float = 0.10) -> None:
+        if not (0.0 < tolerancia <= 10.0):
+            raise ValueError(f"tolerancia={tolerancia} fuera de (0, 10].")
+        self.tolerancia = float(tolerancia)
+        self.name = f"numerico_rel_{self.tolerancia:g}"
+
+    def compare(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
+        n = len(left)
+        if n == 0:
+            return np.zeros(0, dtype=np.float64)
+        a = pd.to_numeric(pd.Series(left), errors="coerce")
+        b = pd.to_numeric(pd.Series(right), errors="coerce")
+        ok = (a.notna() & b.notna()).to_numpy()
+        av, bv = a.to_numpy(dtype="float64"), b.to_numpy(dtype="float64")
+        out = np.zeros(n, dtype=np.float64)
+        if not ok.any():
+            return out
+        denom = np.maximum(np.abs(av), np.abs(bv))
+        ambos_cero = ok & (denom == 0.0)
+        con_denom = ok & (denom > 0.0)
+        rel = np.zeros(n, dtype=np.float64)
+        rel[con_denom] = np.abs(av[con_denom] - bv[con_denom]) / denom[con_denom]
+        sim = np.clip(1.0 - rel / self.tolerancia, 0.0, 1.0)
+        out[con_denom] = sim[con_denom]
+        out[ambos_cero] = 1.0
+        return out

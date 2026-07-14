@@ -37,11 +37,12 @@ from record_linkage.evaluation.pairwise import evaluar_pares
 
 GOLDEN_CSV = Path(__file__).parent / "data" / "golden_truth.csv"
 
-# Umbrales de regresión (piso de calidad). Medidos en v2.2.0:
-# F1=0.650, recall=0.528, precision=0.844. Se deja margen hacia abajo.
-F1_MIN = 0.73
-RECALL_MIN = 0.65
-PRECISION_MIN = 0.80
+# Umbrales de regresión (piso de calidad). Medidos v0.10.0 sobre el golden
+# reconstruido (270 regs, 36 grupos): F1=0.991, recall=0.992, precision=0.989.
+# Se deja ~0.05 de margen hacia abajo.
+F1_MIN = 0.94
+RECALL_MIN = 0.94
+PRECISION_MIN = 0.94
 
 
 @pytest.fixture(scope="module")
@@ -88,9 +89,13 @@ def metricas(golden: pd.DataFrame):
     )
 
 
-def test_pipeline_preserva_todos_los_registros(metricas) -> None:
-    """El pipeline no debe perder ni duplicar registros (contractual)."""
-    assert metricas.n_records == 269
+def test_pipeline_preserva_todos_los_registros(golden, metricas) -> None:
+    """El pipeline no debe perder ni duplicar registros (contractual).
+
+    Se compara contra el número real de filas del golden set (no un literal
+    fijo), de modo que el test siga siendo válido si el dataset se regenera.
+    """
+    assert metricas.n_records == len(golden)
 
 
 def test_recall_no_retrocede(metricas) -> None:

@@ -1,10 +1,11 @@
-"""Fixtures compartidas para tests de integración.
+"""tests/integration/conftest.py
 
-Diseño:
-    - DataFrames pequeños (≤50 filas) con duplicados *conocidos* y matches
-      *cross-source* sembrados intencionalmente.
-    - Semilla fija (RNG_SEED) para reproducibilidad.
-    - Cada fixture incluye, en su docstring, el ground truth esperado.
+Fixtures compartidas por los tests de integración end-to-end
+(`test_deduplicate_unified.py` y `test_orchestrator.py`).
+
+Estas fixtures construyen DataFrames sintéticos pequeños (≤10 filas) con
+ground truth sembrado explícitamente, de modo que las aserciones de los tests
+sean inequívocas y las corridas terminen en segundos.
 """
 
 from __future__ import annotations
@@ -12,45 +13,50 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-RNG_SEED = 42
+
+@pytest.fixture
+def df_empty() -> pd.DataFrame:
+    """DataFrame vacío pero con las columnas esperadas.
+
+    Se usa para verificar que el pipeline levante ``ValueError`` explícito
+    ante entrada vacía, en lugar de fallar silenciosamente aguas abajo.
+    """
+    return pd.DataFrame({"NIT": [], "RAZON_SOCIAL": []})
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Fixtures de datos sintéticos pequeños
-# ─────────────────────────────────────────────────────────────────────────────
 @pytest.fixture
 def df_single_source_with_duplicates() -> pd.DataFrame:
-    """DataFrame de una sola fuente con 3 duplicados sembrados.
+    """8 registros de una sola fuente con 2 pares de duplicados sembrados.
 
-    Ground truth:
-        - Filas 0, 1: mismo NIT '900123456', razón social ligeramente
-          distinta (mayúsculas + SAS vs S.A.S.) → DEBEN agruparse.
-        - Filas 2, 3: mismo NIT '800999111', razón social idéntica
-          → DEBEN agruparse.
-        - Filas 4-7: NITs únicos → 4 grupos distintos.
-        - Total: 8 registros, 6 grupos finales.
+    Ground truth (6 grupos finales esperados):
+        - NIT 900123456 → 2 registros (variación de sufijo)      [par 1]
+        - NIT 800999111 → 2 registros (variación de espaciado)   [par 2]
+        - 4 registros restantes con NITs únicos                  [singletons]
+
+    Reducción esperada: 8 → 6 grupos (25%). Los NITs idénticos DEBEN
+    colapsarse; el resto debe permanecer separado.
     """
     return pd.DataFrame(
         {
             "NIT": [
                 "900123456",
-                "900123456",
+                "900123456",  # par 1 (mismo NIT)
                 "800999111",
-                "800999111",
-                "700555222",
-                "600444333",
-                "500333111",
-                "400222999",
+                "800999111",  # par 2 (mismo NIT)
+                "901111222",  # singleton
+                "800333444",  # singleton
+                "901555666",  # singleton
+                "830777888",  # singleton
             ],
             "RAZON_SOCIAL": [
-                "ACME COLOMBIA SAS",
-                "ACME COLOMBIA S.A.S.",
-                "INVERSIONES BETA LTDA",
-                "INVERSIONES BETA LTDA",
-                "GAMMA INDUSTRIES SAS",
-                "DELTA EXPORTS COLOMBIA",
-                "EPSILON LOGISTICS",
-                "ZETA TRADING CO",
+                "TEXTILES DEL PACIFICO SAS",
+                "TEXTILES DEL PACIFICO S.A.S.",
+                "AGROINDUSTRIAL MANUELITA SA",
+                "AGRO INDUSTRIAL MANUELITA SA",
+                "CONFECCIONES ARCOIRIS SAS",
+                "METALES DEL ORIENTE SAS",
+                "LOGISTICA GLOBAL ANDINA SAS",
+                "EDITORIAL LETRAS DORADAS SAS",
             ],
         }
     )
@@ -58,43 +64,36 @@ def df_single_source_with_duplicates() -> pd.DataFrame:
 
 @pytest.fixture
 def df_two_sources_with_cross_matches() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Dos DataFrames con 3 NITs en común (matches cross-source esperados).
+    """Dos fuentes de 5 registros cada una con 3 NITs en común (cross-match).
 
     Ground truth:
-        - source_a: 5 registros, NITs únicos {900,800,700,600,500}.
-        - source_b: 5 registros, NITs únicos {900,800,700,400,300}.
-        - Intersección: {900,800,700} → 3 matches cross-source esperados.
+        - NITs 900123456, 800999111, 901234567 aparecen en AMBAS fuentes
+          → 3 grupos cross-source.
+        - 2 NITs exclusivos por fuente → singletons.
+        - Total esperado: 5 + 5 - 3 = 7 entidades golden.
     """
     source_a = pd.DataFrame(
         {
-            "NIT": ["900111111", "800222222", "700333333", "600444444", "500555555"],
+            "NIT": ["900123456", "800999111", "901234567", "901111000", "800222000"],
             "RAZON_SOCIAL": [
-                "ALPHA TECH SAS",
-                "BETA SOLUTIONS LTDA",
-                "GAMMA EXPORTS SA",
-                "DELTA LOGISTICS",
-                "EPSILON TRADING",
+                "TEXTILES DEL PACIFICO SAS",
+                "AGROINDUSTRIAL MANUELITA SA",
+                "CONFECCIONES ARCOIRIS SAS",
+                "SERVICIOS INTEGRALES DEL SUR SAS",  # solo en A
+                "TECNOLOGIA E INNOVACION SAS",  # solo en A
             ],
-            "SRC": ["SOURCE_A"] * 5,
         }
     )
     source_b = pd.DataFrame(
         {
-            "NIT": ["900111111", "800222222", "700333333", "400666666", "300777777"],
+            "NIT": ["900123456", "800999111", "901234567", "830444000", "900555000"],
             "RAZON_SOCIAL": [
-                "ALPHA TECH S.A.S.",  # match con A0
-                "BETA SOLUTIONS",  # match con A1
-                "GAMMA EXPORTS S.A.",  # match con A2
-                "ZETA COMMERCE",
-                "OMEGA HOLDINGS",
+                "TEXTILES DEL PACIFICO S.A.S.",  # match A (sufijo)
+                "AGRO INDUSTRIAL MANUELITA SA",  # match A (espaciado)
+                "CONFECCIONES ARCOIRIS SOCIEDAD POR ACCIONES SIMPLIFICADA",  # match A
+                "EDITORIAL LETRAS DORADAS SAS",  # solo en B
+                "CLINICA VISION TOTAL SAS",  # solo en B
             ],
-            "SRC": ["SOURCE_B"] * 5,
         }
     )
     return source_a, source_b
-
-
-@pytest.fixture
-def df_empty() -> pd.DataFrame:
-    """DataFrame vacío para validar manejo de error explícito."""
-    return pd.DataFrame(columns=["NIT", "RAZON_SOCIAL"])

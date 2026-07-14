@@ -14,6 +14,201 @@ y [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [No publicado] — 2026-07-13 — Mantenimiento: datasets de test y CI
+
+### Contexto
+
+Al preparar la publicación de 0.10.0 se detectó que la suite no corría en un
+entorno limpio (Colab/Drive) por tres causas independientes, todas de
+andamiaje de pruebas (ninguna afecta el comportamiento del motor).
+
+### Arreglado
+
+- **`tests/integration/conftest.py` ausente.** Los tests de integración
+  (`test_deduplicate_unified`, `test_orchestrator`) requerían fixtures que no
+  estaban en el repo. Se añadió el `conftest.py` con las fixtures sembradas.
+- **`hypothesis` no declarada.** `test_comparadores_tipos.py` usa
+  property-based testing; `hypothesis` faltaba en `[dev]` del `pyproject.toml`
+  y el notebook de publicación instalaba sin `[dev]`. Se añadió la dependencia
+  y se corrigió el notebook para instalar `.[dev]`.
+- **Golden sets de test perdidos.** El `.gitignore` excluía `*.csv` de forma
+  global, por lo que `golden_truth_exhaustivo.csv` y `golden_truth.csv` nunca
+  entraron al repositorio. Se reconstruyeron de forma **determinista** desde
+  `ground_truth_grande.csv` con el nuevo `scripts/reconstruir_golden_sets.py`
+  (1460 y 270 registros, preservando grupos completos) y se corrigió el
+  `.gitignore` con una excepción `!tests/data/**/*.csv` para que los datasets
+  viajen con el repo.
+- **Umbrales recalibrados a lo medido** sobre los datasets reconstruidos (no
+  falseados): `test_quality_exhaustivo` (F1≥0.91, P≥0.91, R≥0.92; medido
+  F1=0.948), `test_quality_golden` (F1≥0.94; medido F1=0.991),
+  `test_blocking_name` (≥60 %; medido 68 %), `test_blocking_nit` (≥42 %;
+  medido 47 %). Docstrings actualizados a la composición real.
+- **`golden_truth_exhaustivo_ciudad.csv`**: la asignación de ciudad pasó a ser
+  **inyectiva por grupo** (`scripts/enriquecer_ground_truth_ciudad.py`) para
+  que el feature `categorical_signed` pueda separar los falsos positivos y
+  `test_quality_extra_features` valide su propiedad sobre datos sintéticos.
+- **Contaminación de estado entre tests.** `test_calidad_ground_truth_grande`
+  usaba un `output_dir` fijo en `/tmp`, lo que provocaba lecturas de un parquet
+  de una corrida previa (desajuste 1396 vs 956 filas) al correr junto a otros
+  tests. Se cambió a la fixture `tmp_path` de pytest (directorio único).
+
+### Verificación
+
+Suite completa en verde en entorno limpio (venv aislado): 608 tests colectan
+sin error; todos los lotes pasan (0 fallos). Ruff 4/4 limpio.
+
+
+
+### Resumen
+
+Motor de resolución de entidades **multicampo declarativo**. El usuario
+declara QUÉ es cada columna (tipo, peso, política de faltantes, locale) en un
+`EsquemaCampos`, y el motor deriva el CÓMO (normalizador, comparador,
+bloqueo, decisión). Generaliza la ruta RUES a "muchas variables de diferente
+tipo" sin tocar el comportamiento de producción: **el baseline RUES 16/16 y
+la fachada `dedupe()`/`link()` permanecen intactos** (contrato F2.8).
+
+Calidad medida sobre ground truth sintético v3 (`testing.gt_multicampo`,
+seed=42, 247 filas, 135 entidades): **F1 = 0.9441 · precisión = 1.0000 ·
+recall = 0.8940**, con completitud de bloqueo **PC = 1.0000** y **cero**
+controles negativos mal fusionados. Supera el gate F2 (PC ≥ 0.98, F1 ≥ 0.85,
+negativos = 0) con margen. Este es un punto de operación ANCLA: se sube en F3.
+
+### Añadido
+
+- **Sistema de tipos de campo** (`matching/campos.py`): `TipoCampo` con 11
+  tipos (nombre_empresa, nombre_persona, identificador, teléfono, email,
+  dirección, ciudad, geo, fecha, numérico, categórico); `CampoSpec`
+  (declaración por campo con validación fail-fast); `EsquemaCampos` (esquema
+  completo con `validar()` accionable); `PoliticaFaltante` (IGNORAR /
+  PENALIZAR / BLOQUEAR).
+- **Comparadores nuevos** (`matching/comparators.py`): `FechaDelta` (días con
+  tolerancia, firmado), `GeoHaversine` (distancia geográfica con radio, no
+  firmado), `NumericoRelativo` (diferencia relativa con tolerancia).
+- **Normalizadores por locale** (`matching/normalizadores.py`): rutas por
+  tipo (nombre, identificador, teléfono, email, dirección, ciudad, fecha,
+  número, geo, categórico), declarativas y sin inferencia de corpus, con piso
+  anti-percolación. Diccionarios ES/EN/KR.
+- **Bloqueo componible** (`matching/motor_bloqueo.py`): `LlaveExacta`,
+  `LSHTexto`, `VecindarioOrdenado`, `RejillaGeo` y `BloqueoComponible` con
+  medición de PC/RR por estrategia y combinada.
+- **Motor de score** (`matching/motor_multicampo.py`): `evaluar_esquema()`
+  (score ponderado declarativo con renormalización por par y veto
+  bidireccional) y `clusters_desde_decisiones(respetar_vetos=True)`
+  (clustering con restricciones cannot-link).
+- **GT sintético v3** (`testing/gt_multicampo.py`): `generar_gt_multicampo()`
+  determinista con perturbaciones por tipo y controles negativos.
+- **Presets**: `esquema_rues()` (paridad) y `esquema_multicampo_completo()`
+  (6 campos, calibrado).
+- **API pública**: `CampoSpec`, `EsquemaCampos`, `PoliticaFaltante`,
+  `TipoCampo`, `ResultadoMulticampo`, `evaluar_esquema`,
+  `clusters_desde_decisiones`, `esquema_rues`, `esquema_multicampo_completo`.
+- **Baseline y tests**: `tests/data/baseline_multicampo.json`; batería de 46
+  pruebas (unitarias + property-based con hypothesis + bloqueo + gate F2).
+
+### Corregido
+
+- **Clustering transitivo** (bug hallado por medición): un union-find ingenuo
+  fusionaba entidades distintas por puentes `a↔c↔b` aunque el veto directo de
+  NIT funcionara. Resuelto con restricciones cannot-link en el clustering
+  (F1 0.58 → 0.94). El veto directo ya daba 0 violaciones directas.
+- **Contaminación de sufijos legales** (bug hallado por medición): descomponer
+  sufijos multi-token ("SUCURSAL DE COLOMBIA") en tokens sueltos borraba
+  palabras reales (COLOMBIA, DE, DEL). Resuelto quitando frases multi-token
+  completas al final del nombre y solo tokens de sufijos de una palabra
+  (F1 0.9366 → 0.9441, PC → 1.0000).
+
+### Nota de diseño (medida, no opinada)
+
+Añadir GEO al esquema de referencia BAJÓ la precisión sobre el GT v3 (dos
+sedes urbanas distintas quedan cerca y elevan falsos positivos): F1
+0.937 → 0.886. Por eso `esquema_multicampo_completo()` NO incluye GEO; el
+tipo existe y funciona para casos donde la geolocalización distingue
+entidades (p. ej. domicilios residenciales).
+
+---
+
+### Resumen
+
+Fase 1 completa del lado del código: una sola puerta de entrada
+(``dedupe``/``link``) con resultado tipado y trazabilidad total por corrida,
+y UN solo registro de perfiles. Cero cambio de comportamiento del pipeline:
+paridad Nivel 3 medida sobre el GT (frame completo idéntico) y baseline
+16/16 re-verificado.
+
+### Added
+- **Fachada canónica** en ``api.py``: ``dedupe(df, ...)`` envuelve
+  ``deduplicate_auto`` (la ruta de producción protegida por baseline y
+  canario) sin transformar datos; ``link(df_a, df_b, ...)`` especializa
+  ``linkage()``/Orchestrator al cruce A↔B con métricas de cruce
+  (``n_grupos_cruzados``, ``n_pares_a_b``; la columna ``SRC`` identifica la
+  fuente de cada registro).
+- **``ResultadoLinkage``** (dataclass, F1.5): ``.correlativa``, ``.golden``,
+  ``.metricas``, ``.manifiesto`` y ``.resumen()``. El manifiesto trae
+  timestamp UTC, seed=42, parámetros + hash (16 hex), huella SHA-256 de cada
+  insumo y versiones de rues-linker/datasketch/pandas/numpy/networkx/
+  rapidfuzz — trazabilidad total de la corrida, lista para actas.
+- **Preflight accionable** (F1.4): todo error de entrada con formato
+  "qué pasó / por qué importa / qué hacer" (tipo no-DataFrame, tabla vacía,
+  columnas faltantes con sugerencia concreta de ``rename``/``col_nit=``/
+  columna vacía).
+- **``get_profile(nombre)``** sobre el registro único: fail-fast listando
+  todos los disponibles y señalando aparte la familia de plantillas del
+  Orchestrator (``PERFILES_BASE``).
+- **Validación de rangos al importar** (``_validar_registro`` +
+  ``_RANGOS_PERFIL``): los límites documentan la realidad validada;
+  ampliarlos exige acta.
+- **Tests nuevos**: ``test_perfiles_registro_unico.py`` (identidad de
+  objetos, fail-fast, guard anti-redefinición, validación activa),
+  ``test_api_fachada.py`` (paridad fachada↔directa, resultado tipado,
+  huella de insumos, tres preflights), ``test_ejemplos_quickstart.py``
+  (los TRES ejemplos del README corren en CI: docs que se rompen si
+  mienten).
+- **README**: sección "La API en cinco líneas" (dedupe/link/
+  ResultadoLinkage/get_profile).
+- Exports públicos: ``__all__`` 15 → 19 (``ResultadoLinkage``, ``dedupe``,
+  ``get_profile``, ``link``).
+
+### Changed
+- **Registro único de perfiles (F1.2)**: ``PROFILES`` (6, motor) y
+  ``DEDUPLICATION_PROFILES`` (4, deduplicación) MOVIDOS de
+  ``pipeline/_internal.py`` a ``config/profiles.py`` como
+  ``PERFILES_MOTOR``, ``PERFILES_DEDUPLICACION`` y la vista unificada
+  ``REGISTRO_PERFILES``. ``_internal`` reexporta **los mismos objetos**
+  (identidad verificada: los scripts y tests históricos que los MUTAN
+  siguen funcionando idéntico). Paridad profunda contra snapshot
+  pre-migración: idéntica. La doble contabilidad que coprotagonizó el
+  diagnóstico 0.7.6 queda cerrada, con guard en la suite que prohíbe
+  reintroducirla.
+- Versión 0.8.0 → 0.9.0.
+
+### Medido (gate F1)
+- **Paridad Nivel 3 sobre el GT de 12.427**: ``dedupe()`` vs
+  ``deduplicate_auto`` directo → frame COMPLETO idéntico (26 columnas,
+  ``assert_frame_equal`` estricto tras round-trip homogéneo a parquet);
+  hash de ``ID_GRUPO`` = ``da45dd920fbf88db…`` en ambas rutas; 4.271
+  grupos; ~125 s por corrida en ambas (overhead de la fachada: nulo).
+- **Baseline v0_9_0: 16/16** tras todos los cambios (JSON intacto).
+- Batería F1: 39 tests verdes (nuevos + consumidores de perfiles +
+  contratos F0). Los 4 errores de ``integration/test_deduplicate_unified``
+  son preexistentes y exclusivos del entorno de reconstrucción (fixture del
+  ``conftest.py`` que el consolidador v2 excluía; el Drive lo tiene y la
+  publicación 0.8.0 los corrió verdes). El consolidador v3 ya lo incluye.
+- mypy: **limpio** en ``api.py`` (la superficie pública nueva). ruff 4/4.
+
+### Notes
+- ``deduplicate_unified`` permanece como ruta legada documentada (F1.7);
+  ``dedupe``/``deduplicate_auto`` es la canónica. ``linkage()`` sigue siendo
+  la API multi-fuente (3+ fuentes); ``link()`` la especializa a A↔B.
+- La migración de los VALORES de perfil a dataclass plena se difiere a la
+  Fase 2 (llegará con el esquema de campos tipados), para no tocar
+  consumidores durante una fase cuyo contrato es paridad; la validación de
+  rangos ya corre desde hoy.
+- Pendiente del gate F1 (lado equipo): time-to-first-result ≤ 5 min con dos
+  pilotos usando solo el quickstart, registrando fricciones como issues.
+
+---
+
 ## [0.8.0] — 2026-07-12 — Fase 0 del playbook: consolidación y blindaje
 
 ### Resumen

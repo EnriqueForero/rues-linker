@@ -1,20 +1,19 @@
-"""Calidad de linkage sobre el ground truth EXHAUSTIVO (v2.5.0).
+"""Calidad de linkage sobre el ground truth EXHAUSTIVO.
 
-Complementa test_quality_golden.py (269 registros) con un dataset mucho más
-exigente: 1456 registros, 137 grupos, grupos de hasta 18 variantes, NITs con
-errores deliberados (1-2 dígitos, transposición, dígito extra) y CASOS
-NEGATIVOS (empresas de nombre similar pero distintas, para medir falsos
-positivos). Ver `tests/data/golden_truth_exhaustivo.csv`.
+Complementa test_quality_golden.py con un dataset más exigente. El dataset
+`tests/data/golden_truth_exhaustivo.csv` fue reconstruido (v0.10.0) de forma
+determinista desde `ground_truth_grande.csv` con
+`scripts/reconstruir_golden_sets.py`: 1460 registros, 173 grupos, grupos con
+múltiples variantes, NITs con errores y CASOS NEGATIVOS (empresas de nombre
+similar pero distintas, para medir falsos positivos).
 
-Pisos de regresión:
-    - v2.4.0: F1≈0.78, precision≈0.93, recall≈0.67.
-    - v2.5.0: F1≈0.86, precision≈0.88, recall≈0.84 (tras P0-1 Paso 1.1:
-      bloqueo por NIT base). El recall sube +0.17 a costa de bajar la
-      precision 0.05 — neto positivo en F1 (+0.085). Trade-off documentado
-      en CHANGELOG.
+Pisos de regresión (medidos sobre el dataset reconstruido, motor v0.10.0):
+    - Medido: F1=0.948, precision=0.943, recall=0.952.
+    - Los pisos se fijan ~0.03 por debajo de lo medido, para tolerar
+      variabilidad de ejecución sin dejar que la calidad retroceda.
 
-Igual que en el otro test de calidad: estos números NO son un certificado
-de producción, son un piso que impide que la calidad RETROCEDA.
+Estos números NO son un certificado de producción, son un piso que impide que
+la calidad RETROCEDA.
 """
 
 from __future__ import annotations
@@ -33,11 +32,11 @@ from record_linkage.evaluation.pairwise import evaluar_pares
 
 GOLDEN = Path(__file__).parent / "data" / "golden_truth_exhaustivo.csv"
 
-# Pisos de regresión v2.5.0 (medidos: F1=0.863, P=0.886, R=0.842).
+# Pisos de regresión v0.10.0 (medidos: F1=0.948, P=0.943, R=0.952).
 # Se dejan ~0.03 de margen para variabilidad en ejecución.
-F1_MIN = 0.83
-PRECISION_MIN = 0.85
-RECALL_MIN = 0.80
+F1_MIN = 0.91
+PRECISION_MIN = 0.91
+RECALL_MIN = 0.92
 
 
 @pytest.fixture(scope="module")

@@ -4,8 +4,8 @@ El `AdvancedValueSelector` ganó una API por lotes (`select_best_name_batch`,
 `select_best_nit_batch`) que reemplaza los `groupby().apply()` del generator.
 Estos tests garantizan que la versión batch produce EXACTAMENTE el mismo
 resultado que aplicar el método individual grupo por grupo, sobre el ground
-truth exhaustivo (1456 registros, 137 grupos, con casos negativos y NITs con
-errores deliberados).
+truth exhaustivo (1460 registros, 173 grupos, con casos negativos y NITs con
+errores deliberados; reconstruido con scripts/reconstruir_golden_sets.py).
 
 Nota sobre determinismo: en v2.4.0 el desempate final (empate exacto de
 frecuencia y longitud) pasó de `max(set(...))` —no determinista— a un desempate
@@ -38,7 +38,7 @@ def df_grupos() -> pd.DataFrame:
 
 
 def test_paridad_nombres(df_grupos: pd.DataFrame) -> None:
-    """select_best_name_batch == select_best_name por grupo, para los 137 grupos."""
+    """select_best_name_batch == select_best_name por grupo, para todos los grupos."""
     sel = AdvancedValueSelector(SP_MAP)
     batch = sel.select_best_name_batch(df_grupos, "ID_GRUPO")
     diffs = []
@@ -50,7 +50,7 @@ def test_paridad_nombres(df_grupos: pd.DataFrame) -> None:
 
 
 def test_paridad_nits(df_grupos: pd.DataFrame) -> None:
-    """select_best_nit_batch == select_best_nit por grupo, para los 137 grupos."""
+    """select_best_nit_batch == select_best_nit por grupo, para todos los grupos."""
     sel = AdvancedValueSelector(SP_MAP)
     batch = sel.select_best_nit_batch(df_grupos, "ID_GRUPO")
     diffs = []

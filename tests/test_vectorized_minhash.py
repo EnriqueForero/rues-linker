@@ -97,3 +97,8 @@ def test_batch_maneja_no_strings() -> None:
     textos = np.array(["VALIDO TEXTO", None, 12345], dtype=object)
     out = mh.signatures_batch(textos)
     assert out.shape == (3, 32)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# FIN — 327 archivos procesados
+# ════════════════════════════════════════════════════════════════════════════

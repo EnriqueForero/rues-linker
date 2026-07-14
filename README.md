@@ -92,6 +92,35 @@ pip install "rues-linker-0.5.0-FULL.tar.gz[optimization]"
 
 ## Inicio rápido
 
+### La API en cinco líneas (v0.9.0)
+
+```python
+import pandas as pd
+import record_linkage as rl
+
+df = pd.read_parquet("empresas.parquet")   # necesita columnas NIT y RAZON_SOCIAL
+res = rl.dedupe(df)                        # ruta de producción validada (auto)
+print(res.resumen())
+res.correlativa.to_parquet("correlativa.parquet")
+```
+
+Cruce de dos bases (record linkage A↔B):
+
+```python
+res = rl.link(df_rues, df_aduanas, nombre_a="RUES", nombre_b="ADUANAS",
+              trusted={"RUES"})
+print(res.metricas["n_grupos_cruzados"], "entidades presentes en ambas bases")
+```
+
+`res` es un `ResultadoLinkage`: `.correlativa`, `.golden`, `.metricas` y
+`.manifiesto` (trazabilidad total: huella de cada insumo, versiones del
+entorno, hash de parámetros, seed). Perfiles por nombre: `rl.get_profile(...)`
+sobre el registro único de `config/profiles.py`. Errores de entrada con
+formato accionable: qué pasó / por qué importa / qué hacer. **Estos ejemplos
+corren en CI** (`tests/test_ejemplos_quickstart.py`): si el README miente, la
+suite se pone roja.
+
+
 ### Caso 1: Pipeline básico con perfil calibrado
 
 ```python

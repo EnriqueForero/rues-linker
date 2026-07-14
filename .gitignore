@@ -84,6 +84,7 @@ secrets.json
 # En .gitignore la última coincidencia gana; si una regla
 # de exclusión aparece después de una excepción, la anula.
 !notebooks/Nearshoring_tres_fuentes.ipynb
+!notebooks/Pruebas_Dedup_y_Record_Linkage.ipynb
 !notebooks/calibracion_produccion.ipynb
 !notebooks/ejecutar.ipynb
 !notebooks/fuente_unica.ipynb

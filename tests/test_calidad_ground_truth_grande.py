@@ -23,7 +23,14 @@ import pytest
 from record_linkage.deduplication.unified import deduplicate_unified
 from record_linkage.evaluation.pairwise import evaluar_pares
 
-GT_PATH = Path(__file__).resolve().parents[1] / "data" / "ground_truth" / "ground_truth_grande.csv"
+# El ground truth grande vive versionado en tests/data/ (ver excepción del
+# .gitignore). Antes se leía de data/ground_truth/, que NO se versiona, por lo
+# que el test se saltaba en CI; ahora corre siempre.
+GT_PATH = Path(__file__).resolve().parents[1] / "tests" / "data" / "ground_truth_grande.csv"
+if not GT_PATH.exists():  # respaldo: ubicación legada no versionada
+    GT_PATH = (
+        Path(__file__).resolve().parents[1] / "data" / "ground_truth" / "ground_truth_grande.csv"
+    )
 
 # Cotas inferiores de la línea base medida en v2.14.0 (con margen de holgura
 # para no romper por variación menor). Medido: F1 0.976 sobre submuestra CON_NIT.
@@ -32,7 +39,7 @@ PRECISION_MIN_CON_NIT = 0.95
 
 
 @pytest.mark.skipif(not GT_PATH.exists(), reason="ground truth grande no presente")
-def test_calidad_con_nit_no_regresa():
+def test_calidad_con_nit_no_regresa(tmp_path):
     """El F1 del régimen CON_NIT no debe caer por debajo de la cota base."""
     df = pd.read_csv(GT_PATH, dtype=str)
     con = df[df["REGIMEN"] == "CON_NIT"].copy()
@@ -50,7 +57,7 @@ def test_calidad_con_nit_no_regresa():
             col_name="RAZON_SOCIAL",
             mode="BALANCEADO",
             profile="deduplication_standard",
-            output_dir="/tmp/test_gt_grande_con_nit",
+            output_dir=str(tmp_path),
         )
     corr = corr.sort_values("ORIGINAL_INDEX").reset_index(drop=True)
     res = evaluar_pares(con["ID_GROUP"].to_numpy(), corr["ID_GRUPO"].to_numpy())

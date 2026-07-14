@@ -40,10 +40,12 @@ from pathlib import Path
 
 import pandas as pd
 
-# Catálogo de ciudades colombianas (las más pobladas + algunas intermedias).
-# El índice de ciudad se deriva del ID_GROUP, así cada grupo verdadero tiene
-# una ciudad estable y grupos vecinos tienden a diferir.
-_CIUDADES: tuple[str, ...] = (
+# Catálogo base de ciudades colombianas. Para garantizar que CADA grupo
+# verdadero reciba una ciudad distinta (y así el feature pueda separar grupos
+# que el motor sobre-fusiona), el catálogo se expande programáticamente con un
+# sufijo de zona cuando hay más grupos que ciudades base. La asignación es
+# inyectiva por grupo: dos grupos distintos NUNCA comparten ciudad.
+_CIUDADES_BASE: tuple[str, ...] = (
     "BOGOTA",
     "MEDELLIN",
     "CALI",
@@ -66,16 +68,52 @@ _CIUDADES: tuple[str, ...] = (
     "TUNJA",
 )
 
-# Multiplicador primo para dispersar ID_GROUP sobre el catálogo de ciudades:
-# evita que grupos consecutivos (los negativos suelen ser adyacentes) caigan
-# en la misma ciudad. 7 es coprimo con 20 → recorre todo el catálogo.
-_DISPERSION = 7
 # 1 de cada N filas recibe ciudad vacía (simula datos faltantes del RUES).
+# El nulo es por POSICIÓN de fila, nunca por grupo completo: así ningún grupo
+# queda enteramente sin ciudad (lo que anularía la señal para ese grupo).
 _NULL_EVERY = 8  # ≈12.5 % de nulos
 
 
+def _catalogo_para(n_grupos: int) -> list[str]:
+    """Construye un catálogo de al menos ``n_grupos`` ciudades únicas.
+
+    Si hay más grupos que ciudades base, añade un sufijo de zona (NORTE, SUR,
+    …) para generar nombres únicos y estables, manteniéndolos realistas.
+
+    Args:
+        n_grupos: Número de ciudades únicas requeridas.
+
+    Returns:
+        Lista de nombres de ciudad únicos, de longitud >= ``n_grupos``.
+    """
+    zonas = (
+        "",
+        " NORTE",
+        " SUR",
+        " ORIENTE",
+        " OCCIDENTE",
+        " CENTRO",
+        " NORORIENTE",
+        " NOROCCIDENTE",
+        " SURORIENTE",
+        " SUROCCIDENTE",
+        " ZONA 1",
+        " ZONA 2",
+        " ZONA 3",
+        " ZONA 4",
+        " ZONA 5",
+    )
+    catalogo: list[str] = []
+    for zona in zonas:
+        for base in _CIUDADES_BASE:
+            catalogo.append(f"{base}{zona}")
+            if len(catalogo) >= n_grupos:
+                return catalogo
+    return catalogo
+
+
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
-    """Añade columna CIUDAD determinista al ground truth.
+    """Añade columna CIUDAD determinista e inyectiva por grupo.
 
     Args:
         df: DataFrame con al menos ``ID_GROUP``. El orden de filas se respeta.
@@ -91,10 +129,11 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
 
     out = df.copy().reset_index(drop=True)
     group_codes = pd.factorize(out["ID_GROUP"])[0]
-    city_idx = (group_codes * _DISPERSION) % len(_CIUDADES)
-    ciudades = [_CIUDADES[i] for i in city_idx]
+    catalogo = _catalogo_para(int(group_codes.max()) + 1)
+    # Asignación INYECTIVA: cada código de grupo → una ciudad única del catálogo.
+    ciudades = [catalogo[code] for code in group_codes]
 
-    # Inyectar nulos deterministas por posición de fila.
+    # Inyectar nulos deterministas por posición de fila (nunca por grupo entero).
     ciudades = [
         "" if (pos % _NULL_EVERY == _NULL_EVERY - 1) else c for pos, c in enumerate(ciudades)
     ]

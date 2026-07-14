@@ -188,10 +188,11 @@ def test_config_invalida_lanza_error() -> None:
 
 
 def test_ground_truth_aumenta_cobertura() -> None:
-    """Sobre el ground truth exhaustivo, el bloqueo de nombre captura ≥ 20 %.
+    """Sobre el ground truth exhaustivo, el bloqueo de nombre captura ≥ 60 %.
 
-    Techo medido (v2.6.0): 22.7 %. Floor 20 % deja margen de seguridad si
-    en el futuro cambian las stopwords o el regex societario.
+    Medido (v0.10.0, dataset reconstruido de 1460 regs): 68.2 %. Floor 60 %
+    deja margen de seguridad si en el futuro cambian las stopwords o el regex
+    societario.
     """
     from itertools import combinations
     from pathlib import Path
@@ -209,7 +210,7 @@ def test_ground_truth_aumenta_cobertura() -> None:
 
     tp = len(pairs_block & truth_pairs)
     recall_blocking = tp / len(truth_pairs)
-    assert recall_blocking >= 0.20, (
+    assert recall_blocking >= 0.60, (
         f"El bloqueo por nombre solo captura {recall_blocking:.1%} de pares "
-        f"verdaderos; esperaba ≥ 20 %. tp={tp}/{len(truth_pairs)}"
+        f"verdaderos; esperaba ≥ 60 %. tp={tp}/{len(truth_pairs)}"
     )
