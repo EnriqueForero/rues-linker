@@ -199,6 +199,59 @@ class CampoSpec:
         return [self.nombre]
 
 
+@dataclass(frozen=True)
+class CorroboracionVeto:
+    """Regla de corroboración que puede LEVANTAR un veto de identificador (F3).
+
+    Motivación: dos registros de la MISMA entidad pueden tener NITs distintos
+    (un dígito mal capturado, o cambio de NIT por reestructuración). El veto
+    de identificador los separa por seguridad. Esta regla permite reunirlos
+    SOLO cuando hay evidencia independiente fuerte de que son el mismo ente:
+    campos como email o teléfono idénticos (alta entropía), acompañados de
+    alta similitud de nombre.
+
+    Salvaguarda anti-falsos-positivos (hereda la filosofía F2.4): la
+    corroboración NUNCA opera sobre faltantes ni sobre valores de baja
+    entropía (un email genérico gmail compartido, un teléfono de call center).
+    El comparador de cada campo ya devuelve 0.0 ante faltantes/placeholders,
+    de modo que ``sim ≥ umbral_campo`` exige un valor real y (casi) idéntico.
+
+    Attributes:
+        campos_corroborantes: nombres de campo cuya igualdad cuenta como
+            evidencia (p. ej. ("EMAIL", "TELEFONO")). Deben existir en el
+            esquema y no ser el propio identificador.
+        umbral_campo: similitud mínima para considerar un campo "idéntico"
+            (default 0.99: prácticamente igualdad exacta).
+        min_corroborantes: cuántos de esos campos deben ser idénticos para
+            levantar el veto (default 1).
+        umbral_nombre_empresa: similitud mínima de nombre de empresa exigida
+            en paralelo (default 0.90). Evita reunir entidades homónimas.
+        activa: interruptor. Por defecto False → el motor se comporta EXACTO
+            como antes de F3 (cero cambios de comportamiento hasta activarla).
+    """
+
+    campos_corroborantes: tuple[str, ...] = ()
+    umbral_campo: float = 0.99
+    min_corroborantes: int = 1
+    umbral_nombre_empresa: float = 0.90
+    activa: bool = False
+
+    def __post_init__(self) -> None:
+        if not (0.0 < self.umbral_campo <= 1.0):
+            raise ValueError(f"umbral_campo={self.umbral_campo} fuera de (0, 1].")
+        if not (0.0 <= self.umbral_nombre_empresa <= 1.0):
+            raise ValueError(f"umbral_nombre_empresa={self.umbral_nombre_empresa} fuera de [0, 1].")
+        if self.min_corroborantes < 1:
+            raise ValueError("min_corroborantes debe ser >= 1.")
+        if self.activa and not self.campos_corroborantes:
+            raise ValueError("CorroboracionVeto activa requiere al menos un campo corroborante.")
+        if self.activa and self.min_corroborantes > len(self.campos_corroborantes):
+            raise ValueError(
+                f"min_corroborantes={self.min_corroborantes} supera el nº de "
+                f"campos corroborantes ({len(self.campos_corroborantes)})."
+            )
+
+
 @dataclass
 class EsquemaCampos:
     """Esquema declarativo completo (F2.6): campos + umbrales de decisión.
@@ -208,12 +261,15 @@ class EsquemaCampos:
         umbral_score: score ponderado mínimo para fusionar (default 0.65).
         min_concordancias: nº mínimo de campos que deben concordar (γ=1).
         nombre: etiqueta del esquema (aparece en manifiestos).
+        corroboracion: regla opcional (F3) que puede levantar el veto de
+            identificador ante evidencia fuerte. Por defecto inactiva.
     """
 
     campos: list[CampoSpec]
     umbral_score: float = 0.65
     min_concordancias: int = 2
     nombre: str = "esquema"
+    corroboracion: CorroboracionVeto = field(default_factory=CorroboracionVeto)
 
     def __post_init__(self) -> None:
         if not self.campos:
@@ -229,6 +285,18 @@ class EsquemaCampos:
                 f"min_concordancias={self.min_concordancias} inválido para "
                 f"{len(self.campos)} campos."
             )
+        # F3: los campos corroborantes deben existir y no ser el identificador.
+        if self.corroboracion.activa:
+            nombres_set = set(nombres)
+            ids = {c.nombre for c in self.campos if c.tipo is TipoCampo.IDENTIFICADOR}
+            for cc in self.corroboracion.campos_corroborantes:
+                if cc not in nombres_set:
+                    raise ValueError(f"Campo corroborante '{cc}' no existe en el esquema.")
+                if cc in ids:
+                    raise ValueError(
+                        f"Campo corroborante '{cc}' no puede ser el identificador "
+                        f"vetado (sería circular)."
+                    )
 
     @property
     def columnas_requeridas(self) -> list[str]:

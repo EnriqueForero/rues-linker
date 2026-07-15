@@ -14,7 +14,42 @@ y [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [No publicado] — 2026-07-13 — Mantenimiento: datasets de test y CI
+## [0.11.0] — 2026-07-14 — Fase 3 del playbook: veto de NIT condicional (corroboración)
+
+### Añadido
+
+- **`CorroboracionVeto`** (`matching/campos.py`): regla declarativa que puede
+  LEVANTAR el veto de identificador cuando hay evidencia independiente fuerte.
+  Se conecta al esquema vía `EsquemaCampos(corroboracion=...)`. Exportada en la
+  API pública (`from record_linkage import CorroboracionVeto`).
+- **Veto condicional en `evaluar_esquema`**: un par con NITs distintos (que hoy
+  el veto separa) se re-habilita SOLO si ≥N campos de alta entropía
+  (email/teléfono) son idénticos (sim ≥ 0.99) Y el nombre de empresa es muy
+  similar (≥ 0.90). Al levantar el veto, la contribución negativa del NIT se
+  retira del score (deja de penalizar, como un faltante bajo IGNORAR).
+- Columna `veto_levantado` en las decisiones (trazabilidad de qué pares se
+  re-habilitaron).
+- `tests/test_corroboracion_veto_f3.py`: 10 tests (recuperación, salvaguardas
+  anti-FP, validación de config).
+
+### Comportamiento y seguridad
+
+- **Inactivo por defecto** (`activa=False`): el comportamiento del motor es
+  IDÉNTICO al de 0.10.0 mientras no se active. Cero cambios en producción.
+- **Salvaguardas anti-falso-positivo** (heredan F2.4): la corroboración nunca
+  opera sobre faltantes ni sobre valores de baja entropía. Verificado con GT y
+  con pruebas adversariales: un gmail genérico compartido o un teléfono de call
+  center NO reúnen entidades de nombre distinto.
+
+### Medido (sobre `Ground_Truth_Multicampo_v1`, esquema de referencia)
+
+- Corroboración OFF: P=1.0000 · R=0.9847 · F1=0.9923 (línea base 0.10.0 intacta).
+- Corroboración ON: **P=1.0000 · R=1.0000 · F1=1.0000** — recupera los casos
+  C09 (NIT con dígito errado) y C21 (empresa con dos NITs) SIN un solo falso
+  positivo. Record linkage se mantiene en F1=1.0000.
+- No-regresión: baseline RUES de producción 16/16 intacto; contrato F2 en verde.
+
+
 
 ### Contexto
 
@@ -56,6 +91,23 @@ andamiaje de pruebas (ninguna afecta el comportamiento del motor).
 
 Suite completa en verde en entorno limpio (venv aislado): 608 tests colectan
 sin error; todos los lotes pasan (0 fallos). Ruff 4/4 limpio.
+
+### Saldado adicional (cero deuda técnica antes de la Fase 3)
+
+- **5 tests que se auto-saltaban → ahora corren.** (a) `test_paridad_p1_1` (4
+  skips) por falta de `oraculo_scorer_p1_1.pkl`: se regeneró con
+  `scripts/capturar_oraculo_p1_1.py` (paridad bit-a-bit del scorer verificada).
+  (b) `test_evaluation_coverage` (1 skip) llamaba a `create_intelligent_sample`
+  con kwargs inexistentes (`n_easy_pos`, …): se actualizó a la firma real
+  `(df, n_samples, output_path)`.
+- **`ground_truth_grande.csv` faltaba en `INCLUIR_SIEMPRE`** del notebook de
+  publicación → se excluía del build y del repo (dejando `test_calidad_
+  ground_truth_grande` sin datos en CI). Se añadió a la lista; se quitaron 3
+  entradas fantasma que ningún test usa.
+- **Pre-flight de 20 min → ~2 min.** El comando de tests del notebook excluía
+  solo `canario`, no `slow`; ahora usa `-m "not canario and not slow"`. Los
+  `slow` siguen corriendo en el CI y el nightly de GitHub (cobertura completa,
+  sin costar tiempo en el pre-flight local).
 
 
 

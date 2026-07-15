@@ -335,10 +335,7 @@ def test_ground_truth_generator_create_sample_no_falla():
         }
     )
     g = GroundTruthGenerator()
-    try:
-        sample = g.create_intelligent_sample(df, n_easy_pos=2, n_diff_pos=2, n_amb=2, n_easy_neg=2)
-        assert isinstance(sample, pd.DataFrame)
-    except Exception as exc:
-        # Algunas implementaciones requieren más columnas (CIUDAD etc).
-        # En ese caso lo marcamos como smoke incompleto, no como fallo.
-        pytest.skip(f"create_intelligent_sample requiere más cols del DF: {exc}")
+    # Firma actual: create_intelligent_sample(df, n_samples, output_path).
+    sample = g.create_intelligent_sample(df, n_samples=8)
+    assert isinstance(sample, pd.DataFrame)
+    assert len(sample) <= len(df)

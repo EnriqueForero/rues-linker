@@ -261,7 +261,19 @@ class TestExportsFromRoot:
 
 
 class TestVersionBumped:
-    def test_version_is_0_7_5(self):
+    def test_version_coincide_con_metadata(self):
+        """La versión expuesta coincide con la del paquete instalado y es semver.
+
+        Se valida contra la metadata real (no un literal hardcodeado que hay
+        que editar en cada release), de modo que el test no se rompe al subir
+        de versión.
+        """
+        import re
+        from importlib.metadata import version
+
         import record_linkage
 
-        assert record_linkage.__version__ == "0.10.0"
+        assert re.match(r"^\d+\.\d+\.\d+$", record_linkage.__version__), (
+            f"__version__ no es semver: {record_linkage.__version__}"
+        )
+        assert record_linkage.__version__ == version("rues-linker")

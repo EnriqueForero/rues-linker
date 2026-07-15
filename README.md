@@ -13,7 +13,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-58%25-yellow)](docs/AUDITORIA_SPRINT_0_6_0.md)
 [![F1 vs GT](https://img.shields.io/badge/F1%20vs%20GT-0.84-brightgreen)](docs/AUDITORIA_FASE1.md)
 
-**Autor:** Enrique Forero · **Versión:** `0.7.5` (pre-1.0) · **Python:** ≥ 3.10 · **Licencia:** Apache-2.0
+**Autor:** Enrique Forero · **Versión:** `0.10.0` (pre-1.0) · **Python:** ≥ 3.10 · **Licencia:** Apache-2.0
 
 > ## 📍 Estado actual: pre-1.0 (`0.x`)
 >

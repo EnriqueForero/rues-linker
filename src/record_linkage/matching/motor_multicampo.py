@@ -116,6 +116,10 @@ def evaluar_esquema(
     veto = np.zeros(m, dtype=bool)
     bloqueo_faltante = np.zeros(m, dtype=bool)
     desglose: dict[str, np.ndarray] = {}
+    # F3: rastrear cuánto aportó CADA identificador vetante al denominador del
+    # score, para poder neutralizarlo si su veto se levanta por corroboración.
+    peso_id_por_par = np.zeros(m, dtype=np.float64)
+    contrib_id_por_par = np.zeros(m, dtype=np.float64)
 
     for k, campo in enumerate(esquema.campos):
         sc = _scores_campo(campo, valores[campo.nombre], i, j)
@@ -126,15 +130,18 @@ def evaluar_esquema(
         contrib = np.clip(sc, 0.0, 1.0)  # score negativo no "premia"
         if campo.faltante is PoliticaFaltante.IGNORAR:
             activo = ~falta
-            suma_ponderada += np.where(activo, contrib * pesos[k], 0.0)
-            peso_activo += np.where(activo, pesos[k], 0.0)
+            aporte_num = np.where(activo, contrib * pesos[k], 0.0)
+            aporte_den = np.where(activo, pesos[k], 0.0)
         elif campo.faltante is PoliticaFaltante.PENALIZAR:
-            suma_ponderada += contrib * pesos[k]  # faltante aporta 0 pero pesa
-            peso_activo += pesos[k]
+            aporte_num = contrib * pesos[k]  # faltante aporta 0 pero pesa
+            aporte_den = np.full(m, pesos[k], dtype=np.float64)
         else:  # BLOQUEAR
-            suma_ponderada += np.where(~falta, contrib * pesos[k], 0.0)
-            peso_activo += pesos[k]
+            aporte_num = np.where(~falta, contrib * pesos[k], 0.0)
+            aporte_den = np.full(m, pesos[k], dtype=np.float64)
             bloqueo_faltante |= falta
+
+        suma_ponderada += aporte_num
+        peso_activo += aporte_den
 
         # Concordancia (γ) SOLO si no falta y supera el umbral del campo.
         concordancias += ((~falta) & (sc >= campo.umbral_concordancia)).astype(np.int64)
@@ -142,7 +149,40 @@ def evaluar_esquema(
         # Veto por discrepancia fuerte (nunca sobre faltantes: F2.4).
         if campo.veta_discrepancia:
             thr = _VETO_FIRMADO if campo.comparador.signed else 0.0  # type: ignore[union-attr]
-            veto |= (~falta) & (sc <= thr)
+            discrepa = (~falta) & (sc <= thr)
+            veto |= discrepa
+            # Acumular el aporte del identificador SOLO en los pares que veta,
+            # para retirarlo del score si luego se levanta el veto (F3).
+            peso_id_por_par += np.where(discrepa, aporte_den, 0.0)
+            contrib_id_por_par += np.where(discrepa, aporte_num, 0.0)
+
+    # ── F3: corroboración — levantar el veto ante evidencia independiente ──
+    # Un par con NITs distintos (veto=True) se re-habilita SOLO si campos de
+    # alta entropía (email/teléfono) son idénticos y el nombre es muy similar.
+    # Nunca opera sobre faltantes: el comparador ya devuelve 0.0 ante ellos,
+    # así que sim ≥ umbral_campo (≈0.99) exige un valor real y casi idéntico.
+    corr = esquema.corroboracion
+    veto_levantado = np.zeros(m, dtype=bool)
+    if corr.activa and bool(veto.any()):
+        corroborantes = np.zeros(m, dtype=np.int64)
+        for nombre_campo in corr.campos_corroborantes:
+            sim = desglose[nombre_campo]
+            corroborantes += (sim >= corr.umbral_campo).astype(np.int64)
+
+        # Similitud de nombre de empresa en paralelo (evita reunir homónimos).
+        nombre_ok = np.ones(m, dtype=bool)
+        for campo in esquema.campos:
+            if campo.tipo is TipoCampo.NOMBRE_EMPRESA:
+                nombre_ok &= desglose[campo.nombre] >= corr.umbral_nombre_empresa
+
+        veto_levantado = veto & (corroborantes >= corr.min_corroborantes) & nombre_ok
+        veto = veto & ~veto_levantado
+
+        # Al levantar el veto, el identificador discrepante deja de penalizar el
+        # score: se retira su aporte del numerador y del denominador (queda como
+        # "no computado", igual que un faltante bajo política IGNORAR).
+        suma_ponderada -= np.where(veto_levantado, contrib_id_por_par, 0.0)
+        peso_activo -= np.where(veto_levantado, peso_id_por_par, 0.0)
 
     score = np.divide(
         suma_ponderada,
@@ -164,6 +204,7 @@ def evaluar_esquema(
             "score": np.round(score, 6),
             "concordancias": concordancias,
             "veto": veto,
+            "veto_levantado": veto_levantado,
             "bloqueo_faltante": bloqueo_faltante,
             "fusion": fusion,
         }

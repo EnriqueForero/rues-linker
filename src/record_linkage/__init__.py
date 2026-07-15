@@ -40,6 +40,7 @@ from .config.profiles import get_profile
 from .config.settings import Config
 from .matching.campos import (
     CampoSpec,
+    CorroboracionVeto,
     EsquemaCampos,
     PoliticaFaltante,
     TipoCampo,
@@ -99,6 +100,7 @@ except ImportError:  # pragma: no cover
 __all__ = [
     "CampoSpec",
     "Config",
+    "CorroboracionVeto",
     "EsquemaCampos",
     "MatcherPostProcessor",
     "MatchingProfile",
