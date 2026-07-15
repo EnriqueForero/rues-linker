@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rues-linker"
-version = "0.10.0"
+version = "0.11.0"
 description = "Sistema modular de record linkage y deduplicación de registros empresariales colombianos. Combina blocking por NIT y por nombre (LSH/MinHash), scorer híbrido con features extra, clustering por disco para datasets grandes (millones de filas) y suite de reportes/dashboards. Diseñado para fuentes RUES, DIAN y registros multifuente de ProColombia."
 readme = "README.md"
 license = {text = "MIT"}

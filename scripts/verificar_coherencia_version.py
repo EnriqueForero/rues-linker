@@ -19,7 +19,10 @@ import re
 import sys
 from pathlib import Path
 
-import tomllib
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 
 RAIZ = Path(__file__).resolve().parents[1]
 CENTINELA = "0.0.0+sin.instalar"

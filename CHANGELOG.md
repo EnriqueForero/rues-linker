@@ -49,6 +49,23 @@ y [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
   positivo. Record linkage se mantiene en F1=1.0000.
 - No-regresión: baseline RUES de producción 16/16 intacto; contrato F2 en verde.
 
+### Corregido (para que el CI de GitHub pase en verde real)
+
+- **Linting del CI (72 errores).** El pre-flight local solo lintaba `src/`,
+  pero el CI corre `ruff check src/ tests/ scripts/`; había imports sin usar en
+  `tests/` que nunca se detectaban. Se limpiaron todos y se corrigió el
+  pre-flight del notebook para lintar el mismo scope que el CI (check + format).
+- **`verificar_coherencia_version.py` en Python 3.10.** Usaba `import tomllib`,
+  inexistente en 3.10; ahora hace fallback a `tomli` (añadido a deps `[dev]`
+  con marcador `python_version < '3.11'`).
+- **Datasets de test no llegaban al build.** El notebook excluía el directorio
+  `data` de forma genérica, lo que arrastraba también `tests/data/`; se corrigió
+  `_debe_incluir` para que un directorio ancestro de un archivo de
+  `INCLUIR_SIEMPRE` no se excluya (así `tests/data/` viaja al repo y el CI corre
+  los tests de calidad en vez de saltarlos).
+- **Coherencia de versión.** `pyproject`, CHANGELOG y el fallback centinela de
+  `__init__` quedan alineados en 0.11.0.
+
 
 
 ### Contexto
