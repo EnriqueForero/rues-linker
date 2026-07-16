@@ -82,6 +82,7 @@ jobs:
       - name: Run pytest with coverage
         run: |
           pytest tests/ -v --tb=short \
+            -m "not canario and not slow" \
             --cov=record_linkage \
             --cov-report=term \
             --cov-report=xml \

@@ -83,6 +83,14 @@ secrets.json
 # Estas reglas DEBEN ser las últimas del archivo.
 # En .gitignore la última coincidencia gana; si una regla
 # de exclusión aparece después de una excepción, la anula.
+# git NO permite des-ignorar un archivo si su directorio padre está
+# ignorado (la regla 'data/' cubre tests/data/). Por eso se des-ignora
+# PRIMERO el directorio y luego su contenido, para versionar los
+# fixtures de test completos (golden sets, baselines, oráculo).
+!tests/data/
+!tests/data/**
+!tests/data_sintetica/
+!tests/data_sintetica/**
 !notebooks/Nearshoring_tres_fuentes.ipynb
 !notebooks/Pruebas_Dedup_y_Record_Linkage.ipynb
 !notebooks/calibracion_produccion.ipynb
