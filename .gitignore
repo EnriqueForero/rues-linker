@@ -91,12 +91,11 @@ secrets.json
 !tests/data/**
 !tests/data_sintetica/
 !tests/data_sintetica/**
-!notebooks/Nearshoring_tres_fuentes.ipynb
-!notebooks/Pruebas_Dedup_y_Record_Linkage.ipynb
-!notebooks/calibracion_produccion.ipynb
-!notebooks/ejecutar.ipynb
-!notebooks/fuente_unica.ipynb
-!notebooks/produccion_4fuentes.ipynb
+!notebooks/01_deduplicar_una_base.ipynb
+!notebooks/02_cruzar_dos_bases.ipynb
+!notebooks/03_produccion_multifuente.ipynb
+!notebooks/04_multicampo_y_evaluacion.ipynb
+!notebooks/README.md
 !tests/data/golden_truth.csv
 !tests/data/golden_truth_exhaustivo.csv
 !tests/data/golden_truth_exhaustivo_ciudad.csv
