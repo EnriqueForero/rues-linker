@@ -96,6 +96,9 @@ secrets.json
 !notebooks/03_produccion_multifuente.ipynb
 !notebooks/04_multicampo_y_evaluacion.ipynb
 !notebooks/README.md
+!notebooks/07_deduplicar_importadores_razon_social_pais.ipynb
+!docs/evidencia_importadores/
+!docs/evidencia_importadores/*.csv
 !tests/data/golden_truth.csv
 !tests/data/golden_truth_exhaustivo.csv
 !tests/data/golden_truth_exhaustivo_ciudad.csv
